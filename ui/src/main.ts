@@ -56,6 +56,8 @@ let logsFilter = "";
 let dnsApplyArmed = false;
 let dnsEnforceArmed = false;
 let dnsUnenforceArmed = false;
+let onboardingStep: 1 | 2 | 3 = 1;
+let lastState: HealthState | null = null;
 
 type LogEntry = {
   ts: string;
@@ -88,6 +90,8 @@ type AppConfig = {
   dns_interface_name: string;
   dns_servers: string[];
   dns_enforce: boolean;
+  ui_theme: "dark" | "contrast" | "black";
+  ui_profile: "light" | "moderate" | "high" | "custom";
 };
 
 type RotationStatus = {
@@ -154,6 +158,8 @@ function defaultConfig(): AppConfig {
     dns_interface_name: "",
     dns_servers: [],
     dns_enforce: false,
+    ui_theme: "dark",
+    ui_profile: "custom",
   };
 }
 
@@ -178,6 +184,50 @@ function lucideIcon(name: string): string {
     default:
       return `<svg ${common}><circle cx="12" cy="12" r="10"/></svg>`;
   }
+}
+
+function applyProfile(profile: AppConfig["ui_profile"], cfg: AppConfig): AppConfig {
+  if (profile === "light") {
+    return {
+      ...cfg,
+      ui_profile: "light",
+      proxy_rotation_enabled: false,
+      jsleak_block_webrtc: false,
+      jsleak_block_mdns: false,
+      jsleak_block_quic: false,
+      fingerprint_strip_headers: true,
+      fingerprint_strip_client_hints: false,
+      dns_enforce: false,
+    };
+  }
+  if (profile === "moderate") {
+    return {
+      ...cfg,
+      ui_profile: "moderate",
+      proxy_rotation_enabled: false,
+      jsleak_block_webrtc: true,
+      jsleak_block_mdns: true,
+      jsleak_block_quic: false,
+      fingerprint_strip_headers: true,
+      fingerprint_strip_client_hints: true,
+      dns_enforce: false,
+    };
+  }
+  if (profile === "high") {
+    return {
+      ...cfg,
+      ui_profile: "high",
+      proxy_rotation_enabled: true,
+      proxy_rotation_interval_sec: Math.max(600, cfg.proxy_rotation_interval_sec || 600),
+      jsleak_block_webrtc: true,
+      jsleak_block_mdns: true,
+      jsleak_block_quic: true,
+      fingerprint_strip_headers: true,
+      fingerprint_strip_client_hints: true,
+      dns_servers: cfg.dns_servers.length ? cfg.dns_servers : ["9.9.9.9", "149.112.112.112"],
+    };
+  }
+  return { ...cfg, ui_profile: "custom" };
 }
 
 function render(state: HealthState) {
@@ -225,6 +275,8 @@ function render(state: HealthState) {
 
   const view = activeView;
   const config = configDraft ?? state.config ?? null;
+  const theme = (config?.ui_theme ?? "dark") as AppConfig["ui_theme"];
+  document.documentElement.setAttribute("data-theme", theme === "black" ? "black" : theme === "contrast" ? "contrast" : "dark");
   const rotation = state.rotationStatus;
   const rotationRunning = Boolean(rotation?.running);
   const rotationEnabled = Boolean(config?.proxy_rotation_enabled);
@@ -280,6 +332,25 @@ function render(state: HealthState) {
         <section class="panel">
           <div class="panel__title">PROXY CONFIG</div>
           <div class="panel__body">
+            <div class="grid2">
+              <div class="field">
+                <div class="field__label">PROFILE</div>
+                <select class="select" id="profile-select">
+                  <option value="custom" ${(config?.ui_profile ?? "custom") === "custom" ? "selected" : ""}>CUSTOM</option>
+                  <option value="light" ${(config?.ui_profile ?? "custom") === "light" ? "selected" : ""}>LIGHT</option>
+                  <option value="moderate" ${(config?.ui_profile ?? "custom") === "moderate" ? "selected" : ""}>MODERATE</option>
+                  <option value="high" ${(config?.ui_profile ?? "custom") === "high" ? "selected" : ""}>HIGH RISK</option>
+                </select>
+              </div>
+              <div class="field">
+                <div class="field__label">THEME</div>
+                <div class="kv" style="border-bottom: 0; padding: 8px 0;">
+                  <div class="kv__k">ACTIVE</div>
+                  <div class="kv__v mono">${escapeText(theme.toUpperCase())}</div>
+                </div>
+              </div>
+            </div>
+
             <div class="grid2">
               <div class="field">
                 <div class="field__label">PROXY LISTEN</div>
@@ -772,6 +843,79 @@ function render(state: HealthState) {
       `
       : "";
 
+  const onboardingPanel =
+    view === "onboarding"
+      ? `
+        <section class="panel">
+          <div class="panel__title">ONBOARDING</div>
+          <div class="panel__body">
+            <div class="kv" style="border-bottom: 0;">
+              <div class="kv__k">STEP</div>
+              <div class="kv__v mono">${onboardingStep} / 3</div>
+            </div>
+
+            ${
+              onboardingStep === 1
+                ? `
+                  <div class="hint">Configure your proxy and start the session. You can change anything later.</div>
+                  <div class="grid2" style="margin-top: 12px;">
+                    <div class="field">
+                      <div class="field__label">PROXY LISTEN</div>
+                      <input class="input" id="ob-listen" value="${escapeAttr(config?.proxy_listen_addr ?? "127.0.0.1:18080")}" />
+                    </div>
+                    <div class="field">
+                      <div class="field__label">UPSTREAM (OPTIONAL)</div>
+                      <input class="input" id="ob-upstream" value="${escapeAttr(config?.upstream_proxy_url ?? "")}" placeholder="http://user:pass@host:port" />
+                    </div>
+                  </div>
+                  <div class="actions">
+                    <button class="btn" type="button" id="ob-save">SAVE</button>
+                    <button class="btn" type="button" id="ob-save-start">SAVE & START</button>
+                    <button class="btn" type="button" id="ob-next">NEXT</button>
+                  </div>
+                `
+                : onboardingStep === 2
+                  ? `
+                    <div class="hint">Choose a threat profile. This sets safe defaults for leak protection.</div>
+                    <div class="grid2" style="margin-top: 12px;">
+                      <button class="btn" type="button" data-ob-prof="light">LIGHT</button>
+                      <button class="btn" type="button" data-ob-prof="moderate">MODERATE</button>
+                      <button class="btn" type="button" data-ob-prof="high">HIGH RISK</button>
+                      <button class="btn" type="button" data-ob-prof="custom">CUSTOM</button>
+                    </div>
+                    <div class="kv" style="margin-top: 12px;">
+                      <div class="kv__k">CURRENT</div>
+                      <div class="kv__v mono">${escapeText(config?.ui_profile ?? "custom")}</div>
+                    </div>
+                    <div class="actions">
+                      <button class="btn" type="button" id="ob-back">BACK</button>
+                      <button class="btn" type="button" id="ob-next">NEXT</button>
+                    </div>
+                  `
+                  : `
+                    <div class="hint">You’re ready. Use shortcuts for speed and safety.</div>
+                    <div class="tablewrap" style="margin-top: 12px;">
+                      <table class="table">
+                        <thead><tr><th>KEY</th><th>ACTION</th></tr></thead>
+                        <tbody>
+                          <tr><td class="mono">CTRL+SHIFT+K</td><td>Kill switch toggle</td></tr>
+                          <tr><td class="mono">CTRL+P</td><td>Proxy start/stop toggle</td></tr>
+                          <tr><td class="mono">CTRL+1..6</td><td>Navigate views</td></tr>
+                          <tr><td class="mono">ESC</td><td>Cancel armed actions</td></tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="actions">
+                      <button class="btn" type="button" id="ob-back">BACK</button>
+                      <button class="btn" type="button" id="ob-finish">GO TO DASHBOARD</button>
+                    </div>
+                  `
+            }
+          </div>
+        </section>
+      `
+      : "";
+
   app.innerHTML = `
     <div class="kaveh-shell">
       <header class="topbar">
@@ -811,6 +955,11 @@ function render(state: HealthState) {
         </nav>
 
         <div class="topbar__right">
+          <select class="select" id="theme-select" aria-label="Theme">
+            <option value="dark" ${theme === "dark" ? "selected" : ""}>DARK</option>
+            <option value="contrast" ${theme === "contrast" ? "selected" : ""}>CONTRAST</option>
+            <option value="black" ${theme === "black" ? "selected" : ""}>PURE BLACK</option>
+          </select>
           <div class="status">
             <span class="statusdot statusdot--${statusColor}"></span>
             <span class="status__ip">MASKED IP ${maskedIp}</span>
@@ -851,6 +1000,7 @@ function render(state: HealthState) {
         ${fingerprintPanel}
         ${trackerPanel}
         ${logsPanel}
+        ${onboardingPanel}
         ${configPanel}
       </main>
     </div>
@@ -863,6 +1013,13 @@ function render(state: HealthState) {
       activeView = next;
       render(state);
     });
+  });
+
+  const themeSel = document.getElementById("theme-select") as HTMLSelectElement | null;
+  themeSel?.addEventListener("change", async () => {
+    const draft = ensureConfigDraft(state.config, {});
+    configDraft = { ...draft, ui_theme: (themeSel.value as AppConfig["ui_theme"]) || "dark" };
+    await saveConfig(state.config);
   });
 
   const startBtn = document.getElementById("proxy-start");
@@ -1067,7 +1224,65 @@ function render(state: HealthState) {
     });
   }
 
+  if (view === "onboarding") {
+    const nextBtn = document.getElementById("ob-next");
+    const backBtn = document.getElementById("ob-back");
+    const finishBtn = document.getElementById("ob-finish");
+
+    nextBtn?.addEventListener("click", () => {
+      onboardingStep = onboardingStep === 1 ? 2 : 3;
+      render(state);
+    });
+    backBtn?.addEventListener("click", () => {
+      onboardingStep = onboardingStep === 3 ? 2 : 1;
+      render(state);
+    });
+    finishBtn?.addEventListener("click", () => {
+      onboardingStep = 1;
+      activeView = "dashboard";
+      render(state);
+    });
+
+    const obListen = document.getElementById("ob-listen") as HTMLInputElement | null;
+    const obUpstream = document.getElementById("ob-upstream") as HTMLInputElement | null;
+    obListen?.addEventListener("input", () => {
+      configDraft = ensureConfigDraft(state.config, { proxy_listen_addr: obListen.value });
+    });
+    obUpstream?.addEventListener("input", () => {
+      configDraft = ensureConfigDraft(state.config, { upstream_proxy_url: obUpstream.value });
+    });
+
+    const obSave = document.getElementById("ob-save");
+    obSave?.addEventListener("click", async () => {
+      await saveConfig(state.config);
+    });
+    const obSaveStart = document.getElementById("ob-save-start");
+    obSaveStart?.addEventListener("click", async () => {
+      const ok = await saveConfig(state.config);
+      if (ok) await fetch(`${PYTHON_BASE_URL}/engine/proxy/start`, { method: "POST" }).catch(() => {});
+    });
+
+    document.querySelectorAll<HTMLButtonElement>("[data-ob-prof]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const p = (btn.getAttribute("data-ob-prof") as AppConfig["ui_profile"] | null) ?? "custom";
+        const base = normalizeConfig(configDraft ?? state.config ?? defaultConfig());
+        configDraft = applyProfile(p, base);
+        await saveConfig(state.config);
+        render(state);
+      });
+    });
+  }
+
   if (view === "proxy") {
+    const profileSel = document.getElementById("profile-select") as HTMLSelectElement | null;
+    profileSel?.addEventListener("change", async () => {
+      const p = (profileSel.value as AppConfig["ui_profile"]) || "custom";
+      const base = normalizeConfig(configDraft ?? state.config ?? defaultConfig());
+      configDraft = applyProfile(p, base);
+      await saveConfig(state.config);
+      render(state);
+    });
+
     const listen = document.getElementById("cfg-proxy-listen") as HTMLInputElement | null;
     const upstreamSingle = document.getElementById("cfg-upstream-single") as HTMLInputElement | null;
     listen?.addEventListener("input", () => {
@@ -1534,9 +1749,81 @@ async function poll(): Promise<HealthState> {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
-  render(await poll());
+  let ksKeyArmedAt = 0;
+
+  window.addEventListener("keydown", async (e) => {
+    if (!lastState) return;
+
+    if (e.key === "Escape") {
+      killswitchArmed = false;
+      macSpoofArmed = false;
+      macResetArmed = false;
+      jsLeakEnableArmed = false;
+      jsLeakDisableArmed = false;
+      dnsApplyArmed = false;
+      dnsEnforceArmed = false;
+      dnsUnenforceArmed = false;
+      trackerArmedIp = "";
+      trackerArmedAction = "";
+      trackerClearArmed = false;
+      render(lastState);
+      return;
+    }
+
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "k") {
+      e.preventDefault();
+      if (lastState.killswitchEnabled) {
+        killswitchArmed = false;
+        await fetch(`${PYTHON_BASE_URL}/engine/killswitch/disable`, { method: "POST" }).catch(() => {});
+        return;
+      }
+      const now = Date.now();
+      if (now - ksKeyArmedAt < 1500) {
+        ksKeyArmedAt = 0;
+        killswitchArmed = false;
+        await fetch(`${PYTHON_BASE_URL}/engine/killswitch/enable`, { method: "POST" }).catch(() => {});
+        return;
+      }
+      ksKeyArmedAt = now;
+      killswitchArmed = true;
+      render(lastState);
+      return;
+    }
+
+    if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
+      e.preventDefault();
+      if (lastState.proxyRunning) {
+        await fetch(`${PYTHON_BASE_URL}/engine/proxy/stop`, { method: "POST" }).catch(() => {});
+      } else {
+        await fetch(`${PYTHON_BASE_URL}/engine/proxy/start`, { method: "POST" }).catch(() => {});
+      }
+      return;
+    }
+
+    if (e.ctrlKey && !e.shiftKey) {
+      const key = e.key;
+      const map: Record<string, ViewKey> = {
+        "1": "dashboard",
+        "2": "proxy",
+        "3": "dns",
+        "4": "fingerprint",
+        "5": "tracker",
+        "6": "logs",
+      };
+      const v = map[key];
+      if (v) {
+        e.preventDefault();
+        activeView = v;
+        render(lastState);
+      }
+    }
+  });
+
+  lastState = await poll();
+  render(lastState);
   setInterval(async () => {
-    render(await poll());
+    lastState = await poll();
+    render(lastState);
   }, 1500);
 });
 
@@ -1583,6 +1870,14 @@ function normalizeConfig(v: Partial<AppConfig> | null | undefined): AppConfig {
     dns_interface_name: typeof v.dns_interface_name === "string" ? v.dns_interface_name : d.dns_interface_name,
     dns_servers: Array.isArray(v.dns_servers) ? v.dns_servers.map((x) => String(x)) : d.dns_servers,
     dns_enforce: typeof v.dns_enforce === "boolean" ? v.dns_enforce : d.dns_enforce,
+    ui_theme:
+      v.ui_theme === "contrast" || v.ui_theme === "black" || v.ui_theme === "dark"
+        ? v.ui_theme
+        : d.ui_theme,
+    ui_profile:
+      v.ui_profile === "high" || v.ui_profile === "moderate" || v.ui_profile === "light" || v.ui_profile === "custom"
+        ? v.ui_profile
+        : d.ui_profile,
   };
 }
 
@@ -1610,6 +1905,8 @@ async function saveConfig(config: AppConfig | null): Promise<boolean> {
     fingerprint_accept_language: cfg.fingerprint_accept_language.trim(),
     dns_interface_name: cfg.dns_interface_name.trim(),
     dns_servers: cfg.dns_servers.map((x) => x.trim()).filter(Boolean),
+    ui_theme: cfg.ui_theme,
+    ui_profile: cfg.ui_profile,
   };
 
   try {

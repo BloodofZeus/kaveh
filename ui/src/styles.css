@@ -21,6 +21,36 @@
     "Liberation Mono", monospace;
 }
 
+[data-theme="contrast"] {
+  --bg-main: #090c10;
+  --bg-panels: #0a0f18;
+  --bg-cards: #0b1422;
+  --border: #2b3e5a;
+  --gold: #ffd36a;
+  --cyan: #14f4d7;
+  --green: #4dff8a;
+  --amber: #ffbf47;
+  --red: #ff4d5a;
+  --text: #ffffff;
+  --text2: #c7d2e4;
+  --muted: #6b7c92;
+}
+
+[data-theme="black"] {
+  --bg-main: #000000;
+  --bg-panels: #05070a;
+  --bg-cards: #070b10;
+  --border: #182334;
+  --gold: #c9a84c;
+  --cyan: #00bfa5;
+  --green: #22c55e;
+  --amber: #f59e0b;
+  --red: #ef4444;
+  --text: #f0f4f8;
+  --text2: #9fb0c2;
+  --muted: #516070;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -39,6 +69,7 @@ body {
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
 }
 
 button {
@@ -89,6 +120,11 @@ button {
   display: flex;
   align-items: center;
   gap: 8px;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    transform 120ms ease;
 }
 
 .navbtn__label {
@@ -101,6 +137,7 @@ button {
   color: var(--text);
   border-color: var(--border);
   background: rgba(201, 168, 76, 0.06);
+  transform: translateY(-1px);
 }
 
 .navbtn.is-active {
@@ -183,6 +220,7 @@ button {
   color: var(--red);
   border: 1px solid var(--red);
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .killswitch:hover {
@@ -203,6 +241,7 @@ button {
 .panel {
   background: var(--bg-cards);
   border: 1px solid var(--border);
+  animation: panelIn 240ms ease both;
 }
 
 .panel__title {
@@ -217,6 +256,17 @@ button {
 
 .panel__body {
   padding: 12px;
+}
+
+@keyframes panelIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .kv {
@@ -252,15 +302,15 @@ button {
 }
 
 .ok {
-  color: var(--success);
+  color: var(--green);
 }
 
 .warn {
-  color: var(--warning);
+  color: var(--amber);
 }
 
 .danger {
-  color: var(--danger);
+  color: var(--red);
 }
 
 .actions {

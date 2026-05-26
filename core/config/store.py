@@ -29,6 +29,8 @@ class AppConfig:
     dns_interface_name: str = ""
     dns_servers: list[str] = field(default_factory=list)
     dns_enforce: bool = False
+    ui_theme: str = "dark"
+    ui_profile: str = "custom"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -68,6 +70,8 @@ class AppConfig:
             dns_interface_name=str(data.get("dns_interface_name", "")),
             dns_servers=dns_servers,
             dns_enforce=bool(data.get("dns_enforce", False)),
+            ui_theme=str(data.get("ui_theme", "dark")),
+            ui_profile=str(data.get("ui_profile", "custom")),
         )
 
 
