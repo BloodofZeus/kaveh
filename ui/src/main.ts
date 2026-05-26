@@ -4,7 +4,22 @@ type HealthState = {
   proxyRunning: boolean;
   killswitchEnabled: boolean;
   dnsServers: string[];
-  connections: Array<{ proto: string; local: string; remote: string; state?: string; pid?: number }>;
+  monitorTakenAt: string;
+  connections: Array<{
+    proto: string;
+    local: string;
+    local_ip?: string;
+    local_port?: number;
+    remote: string;
+    remote_ip?: string;
+    remote_port?: number;
+    remote_rdns?: string;
+    remote_class?: string;
+    state?: string;
+    pid?: number;
+    process_name?: string;
+    process_path?: string;
+  }>;
   maskedIp: string;
   config: AppConfig | null;
   rotationStatus: RotationStatus | null;
@@ -12,6 +27,10 @@ type HealthState = {
   processes: Array<{ pid: number; name: string }>;
   macAdapters: MacAdapter[];
   jsLeakStatus: JSLeakStatus | null;
+  trackerBlocks: string[];
+  logs: LogEntry[];
+  dnsInterfaces: Array<{ name: string; status: string }>;
+  dnsEnforce: { enabled: boolean; supported: boolean; servers: string[]; since?: string | null } | null;
 };
 
 const PYTHON_BASE_URL = "http://127.0.0.1:51338";
@@ -26,6 +45,25 @@ let macSelectedAdapter = "";
 let macCustom = "";
 let jsLeakEnableArmed = false;
 let jsLeakDisableArmed = false;
+let trafficPaused = false;
+let trafficFilter = "";
+let trafficHistory: Array<HealthState["connections"][number] & { seen_at: string }> = [];
+let trackerFilter = "";
+let trackerArmedIp = "";
+let trackerArmedAction: "block" | "unblock" | "" = "";
+let trackerClearArmed = false;
+let logsFilter = "";
+let dnsApplyArmed = false;
+let dnsEnforceArmed = false;
+let dnsUnenforceArmed = false;
+
+type LogEntry = {
+  ts: string;
+  level: "ok" | "warn" | "crit";
+  type: string;
+  message: string;
+  data?: Record<string, unknown>;
+};
 
 type ViewKey = "dashboard" | "proxy" | "dns" | "fingerprint" | "tracker" | "logs" | "onboarding";
 
@@ -47,6 +85,9 @@ type AppConfig = {
   jsleak_block_webrtc: boolean;
   jsleak_block_mdns: boolean;
   jsleak_block_quic: boolean;
+  dns_interface_name: string;
+  dns_servers: string[];
+  dns_enforce: boolean;
 };
 
 type RotationStatus = {
@@ -110,6 +151,9 @@ function defaultConfig(): AppConfig {
     jsleak_block_webrtc: true,
     jsleak_block_mdns: true,
     jsleak_block_quic: false,
+    dns_interface_name: "",
+    dns_servers: [],
+    dns_enforce: false,
   };
 }
 
@@ -148,11 +192,35 @@ function render(state: HealthState) {
       ? "CONFIRM KILL SWITCH"
       : "KILL SWITCH";
   const dnsServers = state.dnsServers.length ? state.dnsServers.join("  ") : "—";
-  const connectionCount = state.connections.length;
-  const connectionRows = state.connections.slice(0, 8).map((c) => {
+  const tf = trafficFilter.trim().toLowerCase();
+  const traffic = tf
+    ? trafficHistory.filter((c) => {
+        const hay = [
+          c.proto,
+          c.local,
+          c.remote,
+          c.remote_ip ?? "",
+          c.remote_rdns ?? "",
+          c.process_name ?? "",
+          c.process_path ?? "",
+          c.state ?? "",
+          c.pid ? String(c.pid) : "",
+        ]
+          .join(" ")
+          .toLowerCase();
+        return hay.includes(tf);
+      })
+    : trafficHistory;
+  const connectionCount = traffic.length;
+  const connectionRows = traffic.slice(0, 220).map((c) => {
     const pid = c.pid ? String(c.pid) : "";
     const st = c.state ? c.state : "";
-    return `<tr><td>${c.proto}</td><td>${c.local}</td><td>${c.remote}</td><td>${st}</td><td>${pid}</td></tr>`;
+    const pname = c.process_name ? escapeText(c.process_name) : "";
+    const rip = c.remote_ip ? escapeText(c.remote_ip) : "";
+    const rdns = c.remote_rdns ? escapeText(c.remote_rdns) : "";
+    const rclass = c.remote_class ? escapeText(c.remote_class) : "";
+    const rlabel = rdns || rip || escapeText(c.remote);
+    return `<tr><td>${escapeText(c.proto)}</td><td class="mono">${escapeText(c.local)}</td><td>${rlabel}<div class="muted mono" style="margin-top: 2px;">${rclass}</div></td><td>${escapeText(st)}</td><td class="mono">${pid}</td><td>${pname}</td></tr>`;
   });
 
   const view = activeView;
@@ -172,6 +240,40 @@ function render(state: HealthState) {
   const jsLeak = state.jsLeakStatus;
   const jsLeakEnabled = Boolean(jsLeak?.enabled);
   const jsLeakSupported = Boolean(jsLeak?.supported);
+  const blocked = new Set(state.trackerBlocks || []);
+  const trackerItems = (() => {
+    const tf = trackerFilter.trim().toLowerCase();
+    const map = new Map<
+      string,
+      { ip: string; rdns: string; count: number; last_seen: string; processes: Set<string>; ports: Set<number> }
+    >();
+    for (const c of trafficHistory) {
+      if (c.remote_class !== "public") continue;
+      const ip = c.remote_ip || "";
+      if (!ip) continue;
+      const rdns = c.remote_rdns || "";
+      const pidp = c.process_name || "";
+      const port = typeof c.remote_port === "number" ? c.remote_port : 0;
+      const key = ip;
+      const it = map.get(key) ?? { ip, rdns, count: 0, last_seen: "", processes: new Set(), ports: new Set() };
+      it.count += 1;
+      if (!it.last_seen || c.seen_at > it.last_seen) it.last_seen = c.seen_at;
+      if (pidp) it.processes.add(pidp);
+      if (port) it.ports.add(port);
+      if (!it.rdns && rdns) it.rdns = rdns;
+      map.set(key, it);
+    }
+    let items = Array.from(map.values());
+    if (tf) {
+      items = items.filter((it) => {
+        const hay = [it.ip, it.rdns, Array.from(it.processes).join(" "), Array.from(it.ports).join(" ")].join(" ").toLowerCase();
+        return hay.includes(tf);
+      });
+    }
+    items.sort((a, b) => b.count - a.count);
+    return items.slice(0, 120);
+  })();
+  const logs = state.logs || [];
   const configPanel =
     view === "proxy"
       ? `
@@ -369,15 +471,61 @@ function render(state: HealthState) {
     view === "dns"
       ? `
         <section class="panel">
-          <div class="panel__title">DNS STATUS</div>
+          <div class="panel__title">DNS MANAGEMENT</div>
           <div class="panel__body">
             <div class="kv">
               <div class="kv__k">SERVERS</div>
               <div class="kv__v mono">${dnsServers}</div>
             </div>
-            <div class="actions">
-              <button class="btn" type="button" id="dns-refresh">REFRESH</button>
-              <button class="btn" type="button" id="dns-flush">FLUSH CACHE</button>
+
+            <div class="field" style="margin-top: 12px;">
+              <div class="field__label">INTERFACE</div>
+              <select class="select" id="dns-iface">
+                ${(state.dnsInterfaces || []).map((it) => {
+                  const label = `${it.name}  ${it.status || ""}`;
+                  const selected = (config?.dns_interface_name ?? "") === it.name ? "selected" : "";
+                  return `<option value="${escapeAttr(it.name)}" ${selected}>${escapeText(label)}</option>`;
+                }).join("")}
+              </select>
+              <div class="hint">Sets system DNS servers for the selected interface.</div>
+            </div>
+
+            <div class="field" style="margin-top: 12px;">
+              <div class="field__label">DNS SERVERS</div>
+              <textarea class="textarea" id="dns-servers" rows="4" placeholder="one IPv4 per line">${escapeText((config?.dns_servers ?? []).join("\n"))}</textarea>
+              <div class="actions">
+                <button class="btn btn--mini" type="button" data-dns-preset="cloudflare">CLOUDFLARE</button>
+                <button class="btn btn--mini" type="button" data-dns-preset="google">GOOGLE</button>
+                <button class="btn btn--mini" type="button" data-dns-preset="quad9">QUAD9</button>
+              </div>
+            </div>
+
+            <div class="grid2" style="margin-top: 12px;">
+              <div class="field">
+                <div class="field__label">APPLY SERVERS</div>
+                <button class="btn" type="button" id="dns-apply">${dnsApplyArmed ? "CONFIRM APPLY" : "APPLY"}</button>
+              </div>
+              <div class="field">
+                <div class="field__label">FLUSH CACHE</div>
+                <button class="btn" type="button" id="dns-flush">FLUSH</button>
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 12px;">
+              <div class="field__label">SECURE DNS ENFORCEMENT</div>
+              <div class="kv" style="border-bottom: 0;">
+                <div class="kv__k">ENABLED</div>
+                <div class="kv__v">${state.dnsEnforce?.enabled ? "YES" : "NO"}</div>
+              </div>
+              <div class="kv" style="border-bottom: 0;">
+                <div class="kv__k">ALLOWED</div>
+                <div class="kv__v mono">${escapeText((state.dnsEnforce?.servers ?? []).join("  "))}</div>
+              </div>
+              <div class="hint">Adds firewall rules (group KavehDNS) to allow DNS only to the configured servers (TCP/UDP 53) and block all other DNS.</div>
+              <div class="actions">
+                <button class="btn" type="button" id="dns-enforce">${dnsEnforceArmed ? "CONFIRM ENFORCE" : "ENFORCE"}</button>
+                <button class="btn" type="button" id="dns-unenforce">${dnsUnenforceArmed ? "CONFIRM DISABLE" : "DISABLE"}</button>
+              </div>
             </div>
           </div>
         </section>
@@ -390,14 +538,34 @@ function render(state: HealthState) {
         <section class="panel">
           <div class="panel__title">LIVE CONNECTIONS</div>
           <div class="panel__body">
-            <div class="kv">
-              <div class="kv__k">COUNT</div>
-              <div class="kv__v">${connectionCount}</div>
+            <div class="grid2">
+              <div class="kv" style="border-bottom: 0;">
+                <div class="kv__k">COUNT</div>
+                <div class="kv__v">${connectionCount}</div>
+              </div>
+              <div class="kv" style="border-bottom: 0;">
+                <div class="kv__k">LAST</div>
+                <div class="kv__v mono">${escapeText(state.monitorTakenAt || "")}</div>
+              </div>
             </div>
-            <div class="tablewrap">
+            <div class="grid2" style="margin-top: 12px;">
+              <div class="field">
+                <div class="field__label">FILTER</div>
+                <input class="input" id="traffic-filter" value="${escapeAttr(trafficFilter)}" placeholder="pid / domain / ip / process" />
+              </div>
+              <div class="field">
+                <div class="field__label">ACTIONS</div>
+                <div class="actions">
+                  <button class="btn" type="button" id="traffic-pause">${trafficPaused ? "RESUME" : "PAUSE"}</button>
+                  <button class="btn" type="button" id="traffic-clear">CLEAR</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="tablewrap" style="max-height: 520px; margin-top: 12px;">
               <table class="table">
                 <thead>
-                  <tr><th>PROTO</th><th>LOCAL</th><th>REMOTE</th><th>STATE</th><th>PID</th></tr>
+                  <tr><th>PROTO</th><th>LOCAL</th><th>REMOTE</th><th>STATE</th><th>PID</th><th>PROCESS</th></tr>
                 </thead>
                 <tbody>
                   ${connectionRows.join("")}
@@ -500,6 +668,110 @@ function render(state: HealthState) {
       `
       : "";
 
+  const trackerPanel =
+    view === "tracker"
+      ? `
+        <section class="panel">
+          <div class="panel__title">TRACKER VISIBILITY</div>
+          <div class="panel__body">
+            <div class="hint">Derived from recent public remote IP connections. Blocking adds outbound firewall rules (group KavehTracker).</div>
+
+            <div class="grid2" style="margin-top: 12px;">
+              <div class="field">
+                <div class="field__label">FILTER</div>
+                <input class="input" id="trk-filter" value="${escapeAttr(trackerFilter)}" placeholder="ip / domain / process / port" />
+              </div>
+              <div class="field">
+                <div class="field__label">ACTIONS</div>
+                <div class="actions">
+                  <button class="btn" type="button" id="trk-clear">${trackerClearArmed ? "CONFIRM CLEAR" : "CLEAR BLOCKS"}</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="tablewrap" style="max-height: 520px; margin-top: 12px;">
+              <table class="table">
+                <thead>
+                  <tr><th>REMOTE</th><th>HITS</th><th>LAST</th><th>PORTS</th><th>PROCESS</th><th></th></tr>
+                </thead>
+                <tbody>
+                  ${trackerItems.map((it) => {
+                    const label = it.rdns ? `${it.rdns}  (${it.ip})` : it.ip;
+                    const ports = Array.from(it.ports).slice(0, 4).join(",");
+                    const proc = Array.from(it.processes).slice(0, 2).join(", ");
+                    const isBlocked = blocked.has(it.ip);
+                    const action: "block" | "unblock" = isBlocked ? "unblock" : "block";
+                    const armed = trackerArmedIp === it.ip && trackerArmedAction === action;
+                    const btn = isBlocked
+                      ? `<button class="btn btn--mini" type="button" data-trk-act="unblock" data-trk-ip="${escapeAttr(it.ip)}">${armed ? "CONFIRM UNBLOCK" : "UNBLOCK"}</button>`
+                      : `<button class="btn btn--mini" type="button" data-trk-act="block" data-trk-ip="${escapeAttr(it.ip)}">${armed ? "CONFIRM BLOCK" : "BLOCK"}</button>`;
+                    return `<tr>
+                      <td class="mono">${escapeText(label)}</td>
+                      <td class="mono">${it.count}</td>
+                      <td class="mono muted">${escapeText(it.last_seen)}</td>
+                      <td class="mono">${escapeText(ports)}</td>
+                      <td>${escapeText(proc)}</td>
+                      <td>${btn}</td>
+                    </tr>`;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      `
+      : "";
+
+  const logsPanel =
+    view === "logs"
+      ? `
+        <section class="panel">
+          <div class="panel__title">AUDIT LOGS</div>
+          <div class="panel__body">
+            <div class="grid2">
+              <div class="field">
+                <div class="field__label">FILTER</div>
+                <input class="input" id="log-filter" value="${escapeAttr(logsFilter)}" placeholder="type / message" />
+              </div>
+              <div class="field">
+                <div class="field__label">ACTIONS</div>
+                <div class="actions">
+                  <button class="btn" type="button" id="log-refresh">REFRESH</button>
+                  <button class="btn" type="button" id="log-clear">CLEAR</button>
+                  <button class="btn" type="button" id="log-export">EXPORT</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="tablewrap" style="max-height: 560px; margin-top: 12px;">
+              <table class="table">
+                <thead>
+                  <tr><th>TS</th><th>LEVEL</th><th>TYPE</th><th>MESSAGE</th></tr>
+                </thead>
+                <tbody>
+                  ${(() => {
+                    const tf = logsFilter.trim().toLowerCase();
+                    const rows = tf
+                      ? logs.filter((l) => `${l.type} ${l.message}`.toLowerCase().includes(tf))
+                      : logs;
+                    return rows.slice(0, 240).map((l) => {
+                      const cls = l.level === "crit" ? "danger" : l.level === "warn" ? "warn" : "ok";
+                      return `<tr>
+                        <td class="mono muted">${escapeText(l.ts)}</td>
+                        <td class="mono ${cls}">${escapeText(l.level.toUpperCase())}</td>
+                        <td class="mono">${escapeText(l.type)}</td>
+                        <td>${escapeText(l.message)}</td>
+                      </tr>`;
+                    }).join("");
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+      `
+      : "";
+
   app.innerHTML = `
     <div class="kaveh-shell">
       <header class="topbar">
@@ -577,6 +849,8 @@ function render(state: HealthState) {
         ${monitorPanel}
         ${dnsPanel}
         ${fingerprintPanel}
+        ${trackerPanel}
+        ${logsPanel}
         ${configPanel}
       </main>
     </div>
@@ -600,14 +874,88 @@ function render(state: HealthState) {
     await fetch(`${PYTHON_BASE_URL}/engine/proxy/stop`, { method: "POST" }).catch(() => {});
   });
 
-  const dnsRefresh = document.getElementById("dns-refresh");
-  const dnsFlush = document.getElementById("dns-flush");
-  dnsRefresh?.addEventListener("click", async () => {
-    await fetch(`${PYTHON_BASE_URL}/engine/dns/status`, { method: "GET" }).catch(() => {});
-  });
-  dnsFlush?.addEventListener("click", async () => {
-    await fetch(`${PYTHON_BASE_URL}/engine/dns/flush`, { method: "POST" }).catch(() => {});
-  });
+  if (view === "dns") {
+    const ifaceSel = document.getElementById("dns-iface") as HTMLSelectElement | null;
+    ifaceSel?.addEventListener("change", () => {
+      const draft = ensureConfigDraft(state.config, {});
+      configDraft = { ...draft, dns_interface_name: ifaceSel.value };
+    });
+
+    const serversEl = document.getElementById("dns-servers") as HTMLTextAreaElement | null;
+    serversEl?.addEventListener("input", () => {
+      const lines = (serversEl.value || "")
+        .split(/\r?\n/g)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const draft = ensureConfigDraft(state.config, {});
+      configDraft = { ...draft, dns_servers: lines };
+    });
+
+    document.querySelectorAll<HTMLButtonElement>("[data-dns-preset]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const p = btn.getAttribute("data-dns-preset") || "";
+        const servers =
+          p === "cloudflare" ? ["1.1.1.1", "1.0.0.1"] : p === "google" ? ["8.8.8.8", "8.8.4.4"] : ["9.9.9.9", "149.112.112.112"];
+        const draft = ensureConfigDraft(state.config, {});
+        configDraft = { ...draft, dns_servers: servers };
+        render(state);
+      });
+    });
+
+    const flushBtn = document.getElementById("dns-flush");
+    flushBtn?.addEventListener("click", async () => {
+      await fetch(`${PYTHON_BASE_URL}/engine/dns/flush`, { method: "POST" }).catch(() => {});
+    });
+
+    const applyBtn = document.getElementById("dns-apply");
+    applyBtn?.addEventListener("click", async () => {
+      if (!dnsApplyArmed) {
+        dnsApplyArmed = true;
+        dnsEnforceArmed = false;
+        dnsUnenforceArmed = false;
+        render(state);
+        return;
+      }
+      dnsApplyArmed = false;
+      const cfg = normalizeConfig(configDraft ?? state.config ?? defaultConfig());
+      await fetch(`${PYTHON_BASE_URL}/engine/dns/set`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ interface_name: cfg.dns_interface_name, servers: cfg.dns_servers }),
+      }).catch(() => {});
+    });
+
+    const enforceBtn = document.getElementById("dns-enforce");
+    enforceBtn?.addEventListener("click", async () => {
+      if (!dnsEnforceArmed) {
+        dnsEnforceArmed = true;
+        dnsApplyArmed = false;
+        dnsUnenforceArmed = false;
+        render(state);
+        return;
+      }
+      dnsEnforceArmed = false;
+      const cfg = normalizeConfig(configDraft ?? state.config ?? defaultConfig());
+      await fetch(`${PYTHON_BASE_URL}/engine/dns/enforce`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ servers: cfg.dns_servers }),
+      }).catch(() => {});
+    });
+
+    const unenforceBtn = document.getElementById("dns-unenforce");
+    unenforceBtn?.addEventListener("click", async () => {
+      if (!dnsUnenforceArmed) {
+        dnsUnenforceArmed = true;
+        dnsApplyArmed = false;
+        dnsEnforceArmed = false;
+        render(state);
+        return;
+      }
+      dnsUnenforceArmed = false;
+      await fetch(`${PYTHON_BASE_URL}/engine/dns/unenforce`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => {});
+    });
+  }
 
   const ksBtn = document.getElementById("killswitch-btn");
   ksBtn?.addEventListener("click", async () => {
@@ -625,6 +973,99 @@ function render(state: HealthState) {
     killswitchArmed = false;
     await fetch(`${PYTHON_BASE_URL}/engine/killswitch/enable`, { method: "POST" }).catch(() => {});
   });
+
+  if (view === "dashboard") {
+    const filterEl = document.getElementById("traffic-filter") as HTMLInputElement | null;
+    filterEl?.addEventListener("input", () => {
+      trafficFilter = filterEl.value;
+      render(state);
+    });
+    const pauseEl = document.getElementById("traffic-pause");
+    pauseEl?.addEventListener("click", () => {
+      trafficPaused = !trafficPaused;
+      render(state);
+    });
+    const clearEl = document.getElementById("traffic-clear");
+    clearEl?.addEventListener("click", () => {
+      trafficHistory = [];
+      render(state);
+    });
+  }
+
+  if (view === "tracker") {
+    const filterEl = document.getElementById("trk-filter") as HTMLInputElement | null;
+    filterEl?.addEventListener("input", () => {
+      trackerFilter = filterEl.value;
+      render(state);
+    });
+
+    document.querySelectorAll<HTMLButtonElement>("[data-trk-act]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const act = (btn.getAttribute("data-trk-act") as "block" | "unblock" | null) ?? "";
+        const ip = btn.getAttribute("data-trk-ip") ?? "";
+        if (!act || !ip) return;
+        if (trackerArmedIp !== ip || trackerArmedAction !== act) {
+          trackerArmedIp = ip;
+          trackerArmedAction = act;
+          trackerClearArmed = false;
+          render(state);
+          return;
+        }
+        trackerArmedIp = "";
+        trackerArmedAction = "";
+        const url = act === "block" ? `${PYTHON_BASE_URL}/engine/monitor/block` : `${PYTHON_BASE_URL}/engine/monitor/unblock`;
+        await fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ remote_ip: ip }),
+        }).catch(() => {});
+      });
+    });
+
+    const clearBtn = document.getElementById("trk-clear");
+    clearBtn?.addEventListener("click", async () => {
+      if (!trackerClearArmed) {
+        trackerClearArmed = true;
+        trackerArmedIp = "";
+        trackerArmedAction = "";
+        render(state);
+        return;
+      }
+      trackerClearArmed = false;
+      await fetch(`${PYTHON_BASE_URL}/engine/monitor/clear_blocks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => {});
+    });
+  }
+
+  if (view === "logs") {
+    const filterEl = document.getElementById("log-filter") as HTMLInputElement | null;
+    filterEl?.addEventListener("input", () => {
+      logsFilter = filterEl.value;
+      render(state);
+    });
+    const refreshBtn = document.getElementById("log-refresh");
+    refreshBtn?.addEventListener("click", async () => {
+      await fetch(`${PYTHON_BASE_URL}/logs/tail`, { method: "GET" }).catch(() => {});
+    });
+    const clearBtn = document.getElementById("log-clear");
+    clearBtn?.addEventListener("click", async () => {
+      await fetch(`${PYTHON_BASE_URL}/logs/clear`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      }).catch(() => {});
+    });
+    const exportBtn = document.getElementById("log-export");
+    exportBtn?.addEventListener("click", () => {
+      const lines = (state.logs || []).map((l) => `${l.ts}\t${l.level}\t${l.type}\t${l.message}`).join("\n");
+      const blob = new Blob([lines], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "kaveh-audit.txt";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
+  }
 
   if (view === "proxy") {
     const listen = document.getElementById("cfg-proxy-listen") as HTMLInputElement | null;
@@ -916,6 +1357,7 @@ async function poll(): Promise<HealthState> {
     proxyRunning: false,
     killswitchEnabled: false,
     dnsServers: [],
+    monitorTakenAt: "",
     connections: [],
     maskedIp: "",
     config: null,
@@ -924,6 +1366,10 @@ async function poll(): Promise<HealthState> {
     processes: [],
     macAdapters: [],
     jsLeakStatus: null,
+    trackerBlocks: [],
+    logs: [],
+    dnsInterfaces: [],
+    dnsEnforce: null,
   };
 
   try {
@@ -964,10 +1410,47 @@ async function poll(): Promise<HealthState> {
       state.dnsServers = [];
     }
 
+    if (activeView === "dns") {
+      try {
+        const res = await fetch(`${PYTHON_BASE_URL}/engine/dns/interfaces`, { method: "GET" });
+        const data = (await res.json()) as { interfaces?: Array<{ name?: string; status?: string }> };
+        const items = Array.isArray(data?.interfaces) ? data.interfaces : [];
+        state.dnsInterfaces = items
+          .filter((it) => typeof it.name === "string")
+          .map((it) => ({ name: it.name as string, status: typeof it.status === "string" ? (it.status as string) : "" }));
+      } catch {
+        state.dnsInterfaces = [];
+      }
+      try {
+        const res = await fetch(`${PYTHON_BASE_URL}/engine/dns/enforce/status`, { method: "GET" });
+        const data = (await res.json()) as { enabled?: boolean; supported?: boolean; servers?: string[]; since?: string | null };
+        state.dnsEnforce = {
+          enabled: Boolean(data?.enabled),
+          supported: Boolean(data?.supported),
+          servers: Array.isArray(data?.servers) ? data.servers.map((x) => String(x)) : [],
+          since: typeof data?.since === "string" ? data.since : null,
+        };
+      } catch {
+        state.dnsEnforce = null;
+      }
+    }
+
     try {
       const res = await fetch(`${PYTHON_BASE_URL}/engine/monitor/connections`, { method: "GET" });
-      const data = (await res.json()) as { connections?: HealthState["connections"] };
+      const data = (await res.json()) as { taken_at?: string; connections?: HealthState["connections"] };
+      state.monitorTakenAt = typeof data?.taken_at === "string" ? data.taken_at : "";
       state.connections = Array.isArray(data?.connections) ? data.connections : [];
+      if (!trafficPaused && state.monitorTakenAt && state.connections.length) {
+        const existing = new Set(trafficHistory.map((c) => `${c.proto}|${c.local}|${c.remote}|${c.pid ?? ""}|${c.state ?? ""}`));
+        const next: typeof trafficHistory = [];
+        for (const c of state.connections) {
+          const key = `${c.proto}|${c.local}|${c.remote}|${c.pid ?? ""}|${c.state ?? ""}`;
+          if (!existing.has(key)) {
+            next.push({ ...c, seen_at: state.monitorTakenAt });
+          }
+        }
+        trafficHistory = [...next, ...trafficHistory].slice(0, 500);
+      }
     } catch {
       state.connections = [];
     }
@@ -1025,6 +1508,26 @@ async function poll(): Promise<HealthState> {
         state.jsLeakStatus = null;
       }
     }
+
+    if (activeView === "tracker") {
+      try {
+        const res = await fetch(`${PYTHON_BASE_URL}/engine/monitor/blocks`, { method: "GET" });
+        const data = (await res.json()) as { blocked_ips?: string[] };
+        state.trackerBlocks = Array.isArray(data?.blocked_ips) ? data.blocked_ips.map((x) => String(x)) : [];
+      } catch {
+        state.trackerBlocks = [];
+      }
+    }
+
+    if (activeView === "logs") {
+      try {
+        const res = await fetch(`${PYTHON_BASE_URL}/logs/tail`, { method: "GET" });
+        const data = (await res.json()) as { entries?: LogEntry[] };
+        state.logs = Array.isArray(data?.entries) ? data.entries : [];
+      } catch {
+        state.logs = [];
+      }
+    }
   }
 
   return state;
@@ -1077,6 +1580,9 @@ function normalizeConfig(v: Partial<AppConfig> | null | undefined): AppConfig {
       typeof v.jsleak_block_webrtc === "boolean" ? v.jsleak_block_webrtc : d.jsleak_block_webrtc,
     jsleak_block_mdns: typeof v.jsleak_block_mdns === "boolean" ? v.jsleak_block_mdns : d.jsleak_block_mdns,
     jsleak_block_quic: typeof v.jsleak_block_quic === "boolean" ? v.jsleak_block_quic : d.jsleak_block_quic,
+    dns_interface_name: typeof v.dns_interface_name === "string" ? v.dns_interface_name : d.dns_interface_name,
+    dns_servers: Array.isArray(v.dns_servers) ? v.dns_servers.map((x) => String(x)) : d.dns_servers,
+    dns_enforce: typeof v.dns_enforce === "boolean" ? v.dns_enforce : d.dns_enforce,
   };
 }
 
@@ -1085,6 +1591,7 @@ function ensureConfigDraft(config: AppConfig | null, patch: Partial<AppConfig>):
   const next = { ...base, ...patch };
   if (!Array.isArray(next.upstream_proxy_chain)) next.upstream_proxy_chain = [];
   if (!Array.isArray(next.proxy_rotation_pool)) next.proxy_rotation_pool = [];
+  if (!Array.isArray(next.dns_servers)) next.dns_servers = [];
   return next;
 }
 
@@ -1101,6 +1608,8 @@ async function saveConfig(config: AppConfig | null): Promise<boolean> {
     proxy_rotation_pool: cfg.proxy_rotation_pool.map((x) => x.trim()).filter(Boolean),
     fingerprint_user_agent: cfg.fingerprint_user_agent.trim(),
     fingerprint_accept_language: cfg.fingerprint_accept_language.trim(),
+    dns_interface_name: cfg.dns_interface_name.trim(),
+    dns_servers: cfg.dns_servers.map((x) => x.trim()).filter(Boolean),
   };
 
   try {

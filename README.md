@@ -23,6 +23,61 @@ Most privacy tools either do too little — showing you what's happening without
 
 ---
 
+## Running on Windows (Development)
+
+Kaveh runs as three local services:
+
+- Go engine API: `http://127.0.0.1:51337`
+- Python core API: `http://127.0.0.1:51338`
+- Local proxy listener (default): `127.0.0.1:18080`
+
+Some features require Administrator privileges (Windows Firewall rule changes, DNS enforcement, MAC spoof/reset, JS leak protection).
+
+### Prerequisites
+
+- Windows 10/11
+- Go installed (engine)
+- Python installed (core)
+- Node.js + npm installed (ui)
+- Rust toolchain + Tauri prerequisites installed (ui)
+
+If PowerShell blocks `npm.ps1` on your machine, use `npm.cmd` (examples below).
+
+### Run (3 terminals)
+
+From the repository root:
+
+**Terminal 1 — Go engine**
+
+```powershell
+cd C:\Users\c4\Documents\Project\kaveh\engine
+go run .
+```
+
+**Terminal 2 — Python core API**
+
+```powershell
+cd C:\Users\c4\Documents\Project\kaveh
+python -m core.api.server
+```
+
+**Terminal 3 — Tauri UI**
+
+```powershell
+cd C:\Users\c4\Documents\Project\kaveh\ui
+npm.cmd install
+npm.cmd run tauri -- dev
+```
+
+### Quick sanity checks
+
+- Engine health: `GET http://127.0.0.1:51337/health`
+- Core health: `GET http://127.0.0.1:51338/health`
+- Config file: `config\kaveh.json`
+- Audit log file: `logs\kaveh_audit.jsonl`
+
+---
+
 ## Architecture
 
 ```

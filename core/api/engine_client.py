@@ -72,11 +72,38 @@ class EngineClient:
     def dns_status(self) -> dict[str, Any]:
         return self._request("GET", "/dns/status")
 
+    def dns_interfaces(self) -> dict[str, Any]:
+        return self._request("GET", "/dns/interfaces")
+
     def dns_flush(self) -> dict[str, Any]:
         return self._request("POST", "/dns/flush")
 
+    def dns_set(self, interface_name: str, servers: list[str]) -> dict[str, Any]:
+        return self._request("POST", "/dns/set", {"confirm": True, "interface_name": interface_name, "servers": servers})
+
+    def dns_enforce_status(self) -> dict[str, Any]:
+        return self._request("GET", "/dns/enforce/status")
+
+    def dns_enforce(self, servers: list[str]) -> dict[str, Any]:
+        return self._request("POST", "/dns/enforce", {"confirm": True, "servers": servers})
+
+    def dns_unenforce(self) -> dict[str, Any]:
+        return self._request("POST", "/dns/unenforce", {"confirm": True})
+
     def monitor_connections(self) -> dict[str, Any]:
         return self._request("GET", "/monitor/connections")
+
+    def monitor_blocks(self) -> dict[str, Any]:
+        return self._request("GET", "/monitor/blocks")
+
+    def monitor_block(self, remote_ip: str) -> dict[str, Any]:
+        return self._request("POST", "/monitor/block", {"confirm": True, "remote_ip": remote_ip})
+
+    def monitor_unblock(self, remote_ip: str) -> dict[str, Any]:
+        return self._request("POST", "/monitor/unblock", {"confirm": True, "remote_ip": remote_ip})
+
+    def monitor_clear_blocks(self) -> dict[str, Any]:
+        return self._request("POST", "/monitor/clear_blocks", {"confirm": True})
 
     def killswitch_status(self) -> dict[str, Any]:
         return self._request("GET", "/killswitch/status")

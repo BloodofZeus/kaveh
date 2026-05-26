@@ -26,6 +26,9 @@ class AppConfig:
     jsleak_block_webrtc: bool = True
     jsleak_block_mdns: bool = True
     jsleak_block_quic: bool = False
+    dns_interface_name: str = ""
+    dns_servers: list[str] = field(default_factory=list)
+    dns_enforce: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -40,6 +43,10 @@ class AppConfig:
         pool: list[str] = []
         if isinstance(pool_raw, list):
             pool = [str(v) for v in pool_raw if str(v).strip()]
+        dns_raw = data.get("dns_servers", [])
+        dns_servers: list[str] = []
+        if isinstance(dns_raw, list):
+            dns_servers = [str(v) for v in dns_raw if str(v).strip()]
         return AppConfig(
             engine_base_url=str(data.get("engine_base_url", "http://127.0.0.1:51337")),
             api_listen_host=str(data.get("api_listen_host", "127.0.0.1")),
@@ -58,6 +65,9 @@ class AppConfig:
             jsleak_block_webrtc=bool(data.get("jsleak_block_webrtc", True)),
             jsleak_block_mdns=bool(data.get("jsleak_block_mdns", True)),
             jsleak_block_quic=bool(data.get("jsleak_block_quic", False)),
+            dns_interface_name=str(data.get("dns_interface_name", "")),
+            dns_servers=dns_servers,
+            dns_enforce=bool(data.get("dns_enforce", False)),
         )
 
 

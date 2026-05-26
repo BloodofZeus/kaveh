@@ -11,6 +11,7 @@ from typing import Any
 
 from core.api.engine_client import EngineClient
 from core.config.store import AppConfig, ConfigStore
+from core.logger.audit import AuditLogger
 
 
 def _write_json(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
@@ -156,6 +157,7 @@ class RotationManager:
         with self._lock:
             self._last_rotated_at = time.time()
 
+        self._server.audit.log("ok", "proxy.rotate", "Upstream rotated", {"upstream": upstream, "next_index": next_index})
         return {"ok": True, "upstream": upstream, "next_index": next_index}
 
     def _run(self) -> None:
@@ -201,6 +203,10 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path == "/system/processes":
             _write_json(self, HTTPStatus.OK, {"processes": _list_processes()})
             return
+        
+        if self.path == "/logs/tail":
+            _write_json(self, HTTPStatus.OK, {"entries": self.server.audit.tail(200)})
+            return
 
         if self.path == "/engine/health":
             try:
@@ -225,10 +231,34 @@ class _Handler(BaseHTTPRequestHandler):
             except Exception as e:
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
+        
+        if self.path == "/engine/dns/interfaces":
+            try:
+                payload = self.server.engine_client().dns_interfaces()
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/dns/enforce/status":
+            try:
+                payload = self.server.engine_client().dns_enforce_status()
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
 
         if self.path == "/engine/monitor/connections":
             try:
                 payload = self.server.engine_client().monitor_connections()
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/monitor/blocks":
+            try:
+                payload = self.server.engine_client().monitor_blocks()
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
@@ -295,40 +325,140 @@ class _Handler(BaseHTTPRequestHandler):
                     cfg.fingerprint_accept_language,
                     cfg.fingerprint_strip_client_hints,
                 )
+                self.server.audit.log(
+                    "ok",
+                    "proxy.start",
+                    "Proxy started",
+                    {"listen": cfg.proxy_listen_addr, "upstream": cfg.upstream_proxy_url, "chain": cfg.upstream_proxy_chain},
+                )
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "proxy.start", "Proxy start failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
         if self.path == "/engine/proxy/stop":
             try:
                 payload = self.server.engine_client().proxy_stop()
+                self.server.audit.log("ok", "proxy.stop", "Proxy stopped")
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "proxy.stop", "Proxy stop failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
         if self.path == "/engine/dns/flush":
             try:
                 payload = self.server.engine_client().dns_flush()
+                self.server.audit.log("ok", "dns.flush", "DNS cache flushed")
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "dns.flush", "DNS flush failed", {"error": str(e)})
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/dns/set":
+            try:
+                data = _read_json(self)
+                interface_name = str(data.get("interface_name", ""))
+                servers_raw = data.get("servers", [])
+                servers = [str(x) for x in servers_raw] if isinstance(servers_raw, list) else []
+                cfg = self.server.config_store.load()
+                cfg_data = cfg.to_dict()
+                cfg_data["dns_interface_name"] = interface_name
+                cfg_data["dns_servers"] = servers
+                self.server.config_store.save(AppConfig.from_dict(cfg_data))
+                payload = self.server.engine_client().dns_set(interface_name, servers)
+                self.server.audit.log("warn", "dns.set", "DNS servers set", {"interface": interface_name, "servers": servers})
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                self.server.audit.log("crit", "dns.set", "DNS set failed", {"error": str(e)})
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/dns/enforce":
+            try:
+                data = _read_json(self)
+                servers_raw = data.get("servers", [])
+                servers = [str(x) for x in servers_raw] if isinstance(servers_raw, list) else []
+                cfg = self.server.config_store.load()
+                cfg_data = cfg.to_dict()
+                cfg_data["dns_servers"] = servers
+                cfg_data["dns_enforce"] = True
+                self.server.config_store.save(AppConfig.from_dict(cfg_data))
+                payload = self.server.engine_client().dns_enforce(servers)
+                self.server.audit.log("warn", "dns.enforce", "DNS enforcement enabled", {"servers": servers})
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                self.server.audit.log("crit", "dns.enforce", "DNS enforcement enable failed", {"error": str(e)})
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/dns/unenforce":
+            try:
+                cfg = self.server.config_store.load()
+                cfg_data = cfg.to_dict()
+                cfg_data["dns_enforce"] = False
+                self.server.config_store.save(AppConfig.from_dict(cfg_data))
+                payload = self.server.engine_client().dns_unenforce()
+                self.server.audit.log("ok", "dns.unenforce", "DNS enforcement disabled")
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                self.server.audit.log("crit", "dns.unenforce", "DNS enforcement disable failed", {"error": str(e)})
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/monitor/block":
+            try:
+                data = _read_json(self)
+                remote_ip = str(data.get("remote_ip", ""))
+                payload = self.server.engine_client().monitor_block(remote_ip)
+                self.server.audit.log("warn", "tracker.block", "Remote blocked", {"remote_ip": remote_ip})
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                self.server.audit.log("crit", "tracker.block", "Remote block failed", {"error": str(e)})
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/monitor/unblock":
+            try:
+                data = _read_json(self)
+                remote_ip = str(data.get("remote_ip", ""))
+                payload = self.server.engine_client().monitor_unblock(remote_ip)
+                self.server.audit.log("ok", "tracker.unblock", "Remote unblocked", {"remote_ip": remote_ip})
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                self.server.audit.log("crit", "tracker.unblock", "Remote unblock failed", {"error": str(e)})
+                _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
+            return
+        
+        if self.path == "/engine/monitor/clear_blocks":
+            try:
+                payload = self.server.engine_client().monitor_clear_blocks()
+                self.server.audit.log("ok", "tracker.clear", "Tracker blocks cleared")
+                _write_json(self, HTTPStatus.OK, payload)
+            except Exception as e:
+                self.server.audit.log("crit", "tracker.clear", "Clear blocks failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
         if self.path == "/engine/killswitch/enable":
             try:
                 payload = self.server.engine_client().killswitch_enable()
+                self.server.audit.log("warn", "killswitch.enable", "Kill switch enabled")
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "killswitch.enable", "Kill switch enable failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
         if self.path == "/engine/killswitch/disable":
             try:
                 payload = self.server.engine_client().killswitch_disable()
+                self.server.audit.log("ok", "killswitch.disable", "Kill switch disabled")
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "killswitch.disable", "Kill switch disable failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
@@ -337,24 +467,30 @@ class _Handler(BaseHTTPRequestHandler):
                 data = _read_json(self)
                 rules = data.get("rules", [])
                 payload = self.server.engine_client().isolation_set_rules(rules if isinstance(rules, list) else [])
+                self.server.audit.log("ok", "isolation.rules", "Isolation rules updated", {"count": len(rules) if isinstance(rules, list) else 0})
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "isolation.rules", "Isolation rules update failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
         if self.path == "/engine/isolation/enable":
             try:
                 payload = self.server.engine_client().isolation_enable()
+                self.server.audit.log("warn", "isolation.enable", "Isolation enabled")
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "isolation.enable", "Isolation enable failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
         if self.path == "/engine/isolation/disable":
             try:
                 payload = self.server.engine_client().isolation_disable()
+                self.server.audit.log("ok", "isolation.disable", "Isolation disabled")
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "isolation.disable", "Isolation disable failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
@@ -366,8 +502,10 @@ class _Handler(BaseHTTPRequestHandler):
                 mac = data.get("mac")
                 mac_str = str(mac) if isinstance(mac, str) else None
                 payload = self.server.engine_client().fingerprint_mac_spoof(adapter_name, mode, mac_str)
+                self.server.audit.log("warn", "mac.spoof", "MAC spoof applied", {"adapter": adapter_name, "mode": mode})
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "mac.spoof", "MAC spoof failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
@@ -376,8 +514,10 @@ class _Handler(BaseHTTPRequestHandler):
                 data = _read_json(self)
                 adapter_name = str(data.get("adapter_name", ""))
                 payload = self.server.engine_client().fingerprint_mac_reset(adapter_name)
+                self.server.audit.log("ok", "mac.reset", "MAC reset", {"adapter": adapter_name})
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "mac.reset", "MAC reset failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
         
@@ -389,26 +529,32 @@ class _Handler(BaseHTTPRequestHandler):
                     cfg.jsleak_block_mdns,
                     cfg.jsleak_block_quic,
                 )
+                self.server.audit.log("warn", "jsleak.enable", "JS leak protection enabled", {"cfg": {"webrtc": cfg.jsleak_block_webrtc, "mdns": cfg.jsleak_block_mdns, "quic": cfg.jsleak_block_quic}})
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "jsleak.enable", "JS leak protection enable failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
         
         if self.path == "/engine/fingerprint/jsleak/disable":
             try:
                 payload = self.server.engine_client().fingerprint_jsleak_disable()
+                self.server.audit.log("ok", "jsleak.disable", "JS leak protection disabled")
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "jsleak.disable", "JS leak protection disable failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_GATEWAY, {"error": str(e)})
             return
 
         if self.path == "/proxy/rotation/start":
             self.server.rotation.start()
+            self.server.audit.log("ok", "proxy.rotation.start", "Rotation started")
             _write_json(self, HTTPStatus.OK, self.server.rotation.status())
             return
 
         if self.path == "/proxy/rotation/stop":
             self.server.rotation.stop()
+            self.server.audit.log("ok", "proxy.rotation.stop", "Rotation stopped")
             _write_json(self, HTTPStatus.OK, self.server.rotation.status())
             return
 
@@ -417,7 +563,18 @@ class _Handler(BaseHTTPRequestHandler):
                 payload = self.server.rotation.rotate_once()
                 _write_json(self, HTTPStatus.OK, payload)
             except Exception as e:
+                self.server.audit.log("crit", "proxy.rotate", "Rotation failed", {"error": str(e)})
                 _write_json(self, HTTPStatus.BAD_REQUEST, {"error": str(e)})
+            return
+        
+        if self.path == "/logs/clear":
+            data = _read_json(self)
+            if not bool(data.get("confirm")):
+                _write_json(self, HTTPStatus.BAD_REQUEST, {"error": "confirm required"})
+                return
+            self.server.audit.clear()
+            self.server.audit.log("ok", "logs.clear", "Audit log cleared")
+            _write_json(self, HTTPStatus.OK, {"ok": True})
             return
 
         _write_json(self, HTTPStatus.NOT_FOUND, {"error": "not found"})
@@ -432,6 +589,7 @@ class _KavehPythonAPIServer(ThreadingHTTPServer):
         self.project_root = project_root
         self.config_store = ConfigStore(project_root=project_root)
         self.rotation = RotationManager(self)
+        self.audit = AuditLogger(project_root=project_root)
 
     def engine_client(self) -> EngineClient:
         cfg = self.config_store.load()

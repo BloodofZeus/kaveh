@@ -247,6 +247,22 @@ button {
   font-family: var(--font-mono);
 }
 
+.muted {
+  color: var(--muted);
+}
+
+.ok {
+  color: var(--success);
+}
+
+.warn {
+  color: var(--warning);
+}
+
+.danger {
+  color: var(--danger);
+}
+
 .actions {
   margin-top: 12px;
   display: flex;
