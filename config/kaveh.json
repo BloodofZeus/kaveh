@@ -1,0 +1,15 @@
+{
+  "api_listen_host": "127.0.0.1",
+  "api_listen_port": 51338,
+  "engine_base_url": "http://127.0.0.1:51337",
+  "proxy_listen_addr": "127.0.0.1:18080",
+  "proxy_rotation_enabled": true,
+  "proxy_rotation_index": 3,
+  "proxy_rotation_interval_sec": 10,
+  "proxy_rotation_pool": [
+    "http://127.0.0.1:9999",
+    "http://127.0.0.1:9998"
+  ],
+  "upstream_proxy_chain": [],
+  "upstream_proxy_url": "http://127.0.0.1:9999"
+}
