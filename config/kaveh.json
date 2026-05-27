@@ -1,15 +1,35 @@
 {
   "api_listen_host": "127.0.0.1",
   "api_listen_port": 51338,
+  "dns_enforce": false,
+  "dns_interface_name": "",
+  "dns_servers": [
+    "1.1.1.1",
+    "1.0.0.1"
+  ],
   "engine_base_url": "http://127.0.0.1:51337",
+  "failover_backups": [],
+  "failover_check_interval_sec": 15,
+  "failover_enabled": false,
+  "failover_index": 0,
+  "failover_probe_host": "example.com:443",
+  "fingerprint_accept_language": "",
+  "fingerprint_strip_client_hints": true,
+  "fingerprint_strip_headers": true,
+  "fingerprint_user_agent": "",
+  "jsleak_block_mdns": true,
+  "jsleak_block_quic": false,
+  "jsleak_block_webrtc": true,
   "proxy_listen_addr": "127.0.0.1:18080",
-  "proxy_rotation_enabled": true,
+  "proxy_rotation_enabled": false,
   "proxy_rotation_index": 3,
   "proxy_rotation_interval_sec": 10,
   "proxy_rotation_pool": [
     "http://127.0.0.1:9999",
     "http://127.0.0.1:9998"
   ],
+  "ui_profile": "moderate",
+  "ui_theme": "dark",
   "upstream_proxy_chain": [],
   "upstream_proxy_url": "http://127.0.0.1:9999"
 }
