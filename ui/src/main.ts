@@ -31,6 +31,7 @@ type HealthState = {
   logs: LogEntry[];
   dnsInterfaces: Array<{ name: string; status: string }>;
   dnsEnforce: { enabled: boolean; supported: boolean; servers: string[]; since?: string | null } | null;
+  failoverStatus: FailoverStatus | null;
 };
 
 const PYTHON_BASE_URL = "http://127.0.0.1:51338";
@@ -67,6 +68,19 @@ type LogEntry = {
   data?: Record<string, unknown>;
 };
 
+type FailoverStatus = {
+  running: boolean;
+  enabled: boolean;
+  interval_sec: number;
+  probe_host: string;
+  backups: string[];
+  index: number;
+  consecutive_failures: number;
+  last_ok_at: number | null;
+  last_failover_at: number | null;
+  last_error: string;
+};
+
 type ViewKey = "dashboard" | "proxy" | "dns" | "fingerprint" | "tracker" | "logs" | "onboarding";
 
 type AppConfig = {
@@ -92,6 +106,11 @@ type AppConfig = {
   dns_enforce: boolean;
   ui_theme: "dark" | "contrast" | "black";
   ui_profile: "light" | "moderate" | "high" | "custom";
+  failover_enabled: boolean;
+  failover_check_interval_sec: number;
+  failover_probe_host: string;
+  failover_backups: string[];
+  failover_index: number;
 };
 
 type RotationStatus = {
@@ -160,6 +179,11 @@ function defaultConfig(): AppConfig {
     dns_enforce: false,
     ui_theme: "dark",
     ui_profile: "custom",
+    failover_enabled: false,
+    failover_check_interval_sec: 15,
+    failover_probe_host: "example.com:443",
+    failover_backups: [],
+    failover_index: 0,
   };
 }
 
@@ -326,6 +350,12 @@ function render(state: HealthState) {
     return items.slice(0, 120);
   })();
   const logs = state.logs || [];
+  const failover = state.failoverStatus;
+  const failoverRunning = Boolean(failover?.running);
+  const failoverEnabled = Boolean(config?.failover_enabled);
+  const failoverInterval = String(config?.failover_check_interval_sec ?? 15);
+  const failoverProbe = String(config?.failover_probe_host ?? "example.com:443");
+  const failoverBackups = (config?.failover_backups ?? []).join("\n");
   const configPanel =
     view === "proxy"
       ? `
@@ -421,6 +451,50 @@ function render(state: HealthState) {
                 <button class="btn" type="button" id="rot-start">START ROTATION</button>
                 <button class="btn" type="button" id="rot-stop">STOP ROTATION</button>
                 <button class="btn" type="button" id="rot-now">ROTATE NOW</button>
+              </div>
+            </div>
+
+            <div class="field" style="margin-top: 12px;">
+              <div class="field__label">FAILOVER</div>
+              <div class="grid2">
+                <div class="field">
+                  <div class="field__label">ENABLED</div>
+                  <button class="btn" type="button" id="fo-toggle">${failoverEnabled ? "ON" : "OFF"}</button>
+                </div>
+                <div class="field">
+                  <div class="field__label">INTERVAL (SEC)</div>
+                  <input class="input" id="fo-interval" value="${escapeAttr(failoverInterval)}" inputmode="numeric" />
+                </div>
+              </div>
+              <div class="grid2" style="margin-top: 12px;">
+                <div class="field">
+                  <div class="field__label">PROBE HOST</div>
+                  <input class="input" id="fo-probe" value="${escapeAttr(failoverProbe)}" placeholder="example.com:443" />
+                </div>
+                <div class="field">
+                  <div class="field__label">STATUS</div>
+                  <div class="kv" style="border-bottom: 0; padding: 8px 0;">
+                    <div class="kv__k">RUNNING</div>
+                    <div class="kv__v">${failoverRunning ? "YES" : "NO"}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="field" style="margin-top: 12px;">
+                <div class="field__label">BACKUP UPSTREAMS</div>
+                <textarea class="textarea" id="fo-backups" rows="5" placeholder="one proxy URL per line">${escapeText(failoverBackups)}</textarea>
+                <div class="hint">Failover probes the local proxy by CONNECTing to PROBE HOST. On repeated failures, it swaps upstream_proxy_url to the next backup and restarts the proxy.</div>
+              </div>
+
+              ${failover?.last_error ? `<div class="error">${escapeText(failover.last_error)}</div>` : ""}
+              <div class="kv" style="border-bottom: 0;">
+                <div class="kv__k">FAILURES</div>
+                <div class="kv__v mono">${String(failover?.consecutive_failures ?? 0)}</div>
+              </div>
+
+              <div class="actions">
+                <button class="btn" type="button" id="fo-start">START MONITOR</button>
+                <button class="btn" type="button" id="fo-stop">STOP MONITOR</button>
+                <button class="btn" type="button" id="fo-trigger">TRIGGER</button>
               </div>
             </div>
 
@@ -1400,6 +1474,48 @@ function render(state: HealthState) {
       await fetch(`${PYTHON_BASE_URL}/proxy/rotation/rotate`, { method: "POST" }).catch(() => {});
     });
 
+    const foToggle = document.getElementById("fo-toggle");
+    foToggle?.addEventListener("click", () => {
+      const draft = ensureConfigDraft(state.config, {});
+      configDraft = { ...draft, failover_enabled: !draft.failover_enabled };
+    });
+    const foInterval = document.getElementById("fo-interval") as HTMLInputElement | null;
+    foInterval?.addEventListener("input", () => {
+      const raw = Number(foInterval.value);
+      const v = Number.isFinite(raw) ? raw : 15;
+      const draft = ensureConfigDraft(state.config, {});
+      configDraft = { ...draft, failover_check_interval_sec: v };
+    });
+    const foProbe = document.getElementById("fo-probe") as HTMLInputElement | null;
+    foProbe?.addEventListener("input", () => {
+      const draft = ensureConfigDraft(state.config, {});
+      configDraft = { ...draft, failover_probe_host: foProbe.value };
+    });
+    const foBackups = document.getElementById("fo-backups") as HTMLTextAreaElement | null;
+    foBackups?.addEventListener("input", () => {
+      const lines = (foBackups.value || "")
+        .split(/\r?\n/g)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      const draft = ensureConfigDraft(state.config, {});
+      configDraft = { ...draft, failover_backups: lines };
+    });
+
+    const foStart = document.getElementById("fo-start");
+    foStart?.addEventListener("click", async () => {
+      await saveConfig(state.config);
+      await fetch(`${PYTHON_BASE_URL}/proxy/failover/start`, { method: "POST" }).catch(() => {});
+    });
+    const foStop = document.getElementById("fo-stop");
+    foStop?.addEventListener("click", async () => {
+      await fetch(`${PYTHON_BASE_URL}/proxy/failover/stop`, { method: "POST" }).catch(() => {});
+    });
+    const foTrigger = document.getElementById("fo-trigger");
+    foTrigger?.addEventListener("click", async () => {
+      await saveConfig(state.config);
+      await fetch(`${PYTHON_BASE_URL}/proxy/failover/trigger`, { method: "POST" }).catch(() => {});
+    });
+
     const fpUa = document.getElementById("fp-ua") as HTMLInputElement | null;
     fpUa?.addEventListener("input", () => {
       configDraft = ensureConfigDraft(state.config, { fingerprint_user_agent: fpUa.value });
@@ -1585,6 +1701,7 @@ async function poll(): Promise<HealthState> {
     logs: [],
     dnsInterfaces: [],
     dnsEnforce: null,
+    failoverStatus: null,
   };
 
   try {
@@ -1704,6 +1821,13 @@ async function poll(): Promise<HealthState> {
           .map((p) => ({ pid: p.pid as number, name: p.name as string }));
       } catch {
         state.processes = [];
+      }
+      try {
+        const res = await fetch(`${PYTHON_BASE_URL}/proxy/failover/status`, { method: "GET" });
+        const data = (await res.json()) as FailoverStatus;
+        if (data && typeof data === "object") state.failoverStatus = data;
+      } catch {
+        state.failoverStatus = null;
       }
     }
 
@@ -1878,6 +2002,13 @@ function normalizeConfig(v: Partial<AppConfig> | null | undefined): AppConfig {
       v.ui_profile === "high" || v.ui_profile === "moderate" || v.ui_profile === "light" || v.ui_profile === "custom"
         ? v.ui_profile
         : d.ui_profile,
+    failover_enabled: typeof v.failover_enabled === "boolean" ? v.failover_enabled : d.failover_enabled,
+    failover_check_interval_sec:
+      typeof v.failover_check_interval_sec === "number" ? v.failover_check_interval_sec : d.failover_check_interval_sec,
+    failover_probe_host:
+      typeof v.failover_probe_host === "string" ? v.failover_probe_host : d.failover_probe_host,
+    failover_backups: Array.isArray(v.failover_backups) ? v.failover_backups.map((x) => String(x)) : d.failover_backups,
+    failover_index: typeof v.failover_index === "number" ? v.failover_index : d.failover_index,
   };
 }
 
@@ -1887,6 +2018,7 @@ function ensureConfigDraft(config: AppConfig | null, patch: Partial<AppConfig>):
   if (!Array.isArray(next.upstream_proxy_chain)) next.upstream_proxy_chain = [];
   if (!Array.isArray(next.proxy_rotation_pool)) next.proxy_rotation_pool = [];
   if (!Array.isArray(next.dns_servers)) next.dns_servers = [];
+  if (!Array.isArray(next.failover_backups)) next.failover_backups = [];
   return next;
 }
 
@@ -1907,6 +2039,11 @@ async function saveConfig(config: AppConfig | null): Promise<boolean> {
     dns_servers: cfg.dns_servers.map((x) => x.trim()).filter(Boolean),
     ui_theme: cfg.ui_theme,
     ui_profile: cfg.ui_profile,
+    failover_enabled: cfg.failover_enabled,
+    failover_check_interval_sec: cfg.failover_check_interval_sec,
+    failover_probe_host: cfg.failover_probe_host.trim(),
+    failover_backups: cfg.failover_backups.map((x) => x.trim()).filter(Boolean),
+    failover_index: cfg.failover_index,
   };
 
   try {

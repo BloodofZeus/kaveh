@@ -31,6 +31,11 @@ class AppConfig:
     dns_enforce: bool = False
     ui_theme: str = "dark"
     ui_profile: str = "custom"
+    failover_enabled: bool = False
+    failover_check_interval_sec: int = 15
+    failover_probe_host: str = "example.com:443"
+    failover_backups: list[str] = field(default_factory=list)
+    failover_index: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -49,6 +54,10 @@ class AppConfig:
         dns_servers: list[str] = []
         if isinstance(dns_raw, list):
             dns_servers = [str(v) for v in dns_raw if str(v).strip()]
+        fo_raw = data.get("failover_backups", [])
+        fo_backups: list[str] = []
+        if isinstance(fo_raw, list):
+            fo_backups = [str(v) for v in fo_raw if str(v).strip()]
         return AppConfig(
             engine_base_url=str(data.get("engine_base_url", "http://127.0.0.1:51337")),
             api_listen_host=str(data.get("api_listen_host", "127.0.0.1")),
@@ -72,6 +81,11 @@ class AppConfig:
             dns_enforce=bool(data.get("dns_enforce", False)),
             ui_theme=str(data.get("ui_theme", "dark")),
             ui_profile=str(data.get("ui_profile", "custom")),
+            failover_enabled=bool(data.get("failover_enabled", False)),
+            failover_check_interval_sec=int(data.get("failover_check_interval_sec", 15)),
+            failover_probe_host=str(data.get("failover_probe_host", "example.com:443")),
+            failover_backups=fo_backups,
+            failover_index=int(data.get("failover_index", 0)),
         )
 
 

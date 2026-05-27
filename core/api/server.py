@@ -11,7 +11,9 @@ from typing import Any
 
 from core.api.engine_client import EngineClient
 from core.config.store import AppConfig, ConfigStore
+from core.failover.manager import FailoverManager
 from core.logger.audit import AuditLogger
+from core.profiles.presets import apply_profile
 
 
 def _write_json(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
@@ -136,7 +138,7 @@ class RotationManager:
         cfg_data = cfg.to_dict()
         cfg_data["upstream_proxy_url"] = upstream
         cfg_data["proxy_rotation_index"] = next_index
-        new_cfg = AppConfig.from_dict(cfg_data)
+        new_cfg = apply_profile(AppConfig.from_dict(cfg_data))
         self._server.config_store.save(new_cfg)
 
         client = self._server.engine_client()
@@ -206,6 +208,10 @@ class _Handler(BaseHTTPRequestHandler):
         
         if self.path == "/logs/tail":
             _write_json(self, HTTPStatus.OK, {"entries": self.server.audit.tail(200)})
+            return
+        
+        if self.path == "/proxy/failover/status":
+            _write_json(self, HTTPStatus.OK, self.server.failover.status())
             return
 
         if self.path == "/engine/health":
@@ -308,7 +314,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
 
         data = _read_json(self)
-        cfg = AppConfig.from_dict(data)
+        cfg = apply_profile(AppConfig.from_dict(data))
         self.server.config_store.save(cfg)
         _write_json(self, HTTPStatus.OK, cfg.to_dict())
 
@@ -567,6 +573,24 @@ class _Handler(BaseHTTPRequestHandler):
                 _write_json(self, HTTPStatus.BAD_REQUEST, {"error": str(e)})
             return
         
+        if self.path == "/proxy/failover/start":
+            self.server.failover.start()
+            self.server.audit.log("ok", "failover.start", "Failover monitoring started")
+            _write_json(self, HTTPStatus.OK, self.server.failover.status())
+            return
+        
+        if self.path == "/proxy/failover/stop":
+            self.server.failover.stop()
+            self.server.audit.log("ok", "failover.stop", "Failover monitoring stopped")
+            _write_json(self, HTTPStatus.OK, self.server.failover.status())
+            return
+        
+        if self.path == "/proxy/failover/trigger":
+            payload = self.server.failover.trigger()
+            self.server.audit.log("warn", "failover.trigger", "Failover triggered")
+            _write_json(self, HTTPStatus.OK, payload)
+            return
+        
         if self.path == "/logs/clear":
             data = _read_json(self)
             if not bool(data.get("confirm")):
@@ -590,6 +614,7 @@ class _KavehPythonAPIServer(ThreadingHTTPServer):
         self.config_store = ConfigStore(project_root=project_root)
         self.rotation = RotationManager(self)
         self.audit = AuditLogger(project_root=project_root)
+        self.failover = FailoverManager(self)
 
     def engine_client(self) -> EngineClient:
         cfg = self.config_store.load()
