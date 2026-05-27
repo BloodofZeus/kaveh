@@ -686,11 +686,11 @@ function render(state: HealthState) {
             <div class="grid2">
               <div class="kv" style="border-bottom: 0;">
                 <div class="kv__k">COUNT</div>
-                <div class="kv__v">${connectionCount}</div>
+                <div class="kv__v" id="conn-count">${connectionCount}</div>
               </div>
               <div class="kv" style="border-bottom: 0;">
                 <div class="kv__k">LAST</div>
-                <div class="kv__v mono">${escapeText(state.monitorTakenAt || "")}</div>
+                <div class="kv__v mono" id="conn-last">${escapeText(state.monitorTakenAt || "")}</div>
               </div>
             </div>
             <div class="grid2" style="margin-top: 12px;">
@@ -712,7 +712,7 @@ function render(state: HealthState) {
                 <thead>
                   <tr><th>PROTO</th><th>LOCAL</th><th>REMOTE</th><th>STATE</th><th>PID</th><th>PROCESS</th></tr>
                 </thead>
-                <tbody>
+                <tbody id="conn-tbody">
                   ${connectionRows.join("")}
                 </tbody>
               </table>
@@ -1035,8 +1035,8 @@ function render(state: HealthState) {
             <option value="black" ${theme === "black" ? "selected" : ""}>PURE BLACK</option>
           </select>
           <div class="status">
-            <span class="statusdot statusdot--${statusColor}"></span>
-            <span class="status__ip">MASKED IP ${maskedIp}</span>
+            <span class="statusdot statusdot--${statusColor}" id="statusdot"></span>
+            <span class="status__ip" id="masked-ip">MASKED IP ${maskedIp}</span>
           </div>
           <button class="killswitch" type="button" id="killswitch-btn">${killswitchLabel}</button>
         </div>
@@ -1048,19 +1048,19 @@ function render(state: HealthState) {
           <div class="panel__body">
             <div class="kv">
               <div class="kv__k">PYTHON API</div>
-              <div class="kv__v">${state.pythonOk ? "ONLINE" : "OFFLINE"}</div>
+              <div class="kv__v" id="status-python">${state.pythonOk ? "ONLINE" : "OFFLINE"}</div>
             </div>
             <div class="kv">
               <div class="kv__k">GO ENGINE</div>
-              <div class="kv__v">${state.engineOk ? "ONLINE" : "OFFLINE"}</div>
+              <div class="kv__v" id="status-engine">${state.engineOk ? "ONLINE" : "OFFLINE"}</div>
             </div>
             <div class="kv">
               <div class="kv__k">PROXY</div>
-              <div class="kv__v">${state.proxyRunning ? "RUNNING" : "STOPPED"}</div>
+              <div class="kv__v" id="status-proxy">${state.proxyRunning ? "RUNNING" : "STOPPED"}</div>
             </div>
             <div class="kv">
               <div class="kv__k">KILL SWITCH</div>
-              <div class="kv__v">${state.killswitchEnabled ? "ENABLED" : "DISABLED"}</div>
+              <div class="kv__v" id="status-ks">${state.killswitchEnabled ? "ENABLED" : "DISABLED"}</div>
             </div>
 
             <div class="actions">
@@ -1198,6 +1198,7 @@ function render(state: HealthState) {
 
     if (!killswitchArmed) {
       killswitchArmed = true;
+      patch(state);
       return;
     }
 
@@ -1681,6 +1682,75 @@ function render(state: HealthState) {
   }
 }
 
+function patch(state: HealthState) {
+  const statusColor = state.pythonOk && state.engineOk ? "ok" : state.pythonOk ? "warn" : "down";
+  const statusDot = document.getElementById("statusdot");
+  if (statusDot) statusDot.className = `statusdot statusdot--${statusColor}`;
+
+  const maskedIp = state.maskedIp || "---.---.---.---";
+  const ipEl = document.getElementById("masked-ip");
+  if (ipEl) ipEl.textContent = `MASKED IP ${maskedIp}`;
+
+  const killswitchLabel = state.killswitchEnabled
+    ? "DISABLE KILL SWITCH"
+    : killswitchArmed
+      ? "CONFIRM KILL SWITCH"
+      : "KILL SWITCH";
+  const ksBtn = document.getElementById("killswitch-btn");
+  if (ksBtn) ksBtn.textContent = killswitchLabel;
+
+  const pyEl = document.getElementById("status-python");
+  if (pyEl) pyEl.textContent = state.pythonOk ? "ONLINE" : "OFFLINE";
+  const enEl = document.getElementById("status-engine");
+  if (enEl) enEl.textContent = state.engineOk ? "ONLINE" : "OFFLINE";
+  const prEl = document.getElementById("status-proxy");
+  if (prEl) prEl.textContent = state.proxyRunning ? "RUNNING" : "STOPPED";
+  const ksEl = document.getElementById("status-ks");
+  if (ksEl) ksEl.textContent = state.killswitchEnabled ? "ENABLED" : "DISABLED";
+
+  if (activeView === "dashboard") {
+    const tf = trafficFilter.trim().toLowerCase();
+    const traffic = tf
+      ? trafficHistory.filter((c) => {
+          const hay = [
+            c.proto,
+            c.local,
+            c.remote,
+            c.remote_ip ?? "",
+            c.remote_rdns ?? "",
+            c.process_name ?? "",
+            c.process_path ?? "",
+            c.state ?? "",
+            c.pid ? String(c.pid) : "",
+          ]
+            .join(" ")
+            .toLowerCase();
+          return hay.includes(tf);
+        })
+      : trafficHistory;
+
+    const countEl = document.getElementById("conn-count");
+    if (countEl) countEl.textContent = String(traffic.length);
+    const lastEl = document.getElementById("conn-last");
+    if (lastEl) lastEl.textContent = state.monitorTakenAt || "";
+
+    const tbody = document.getElementById("conn-tbody");
+    if (tbody) {
+      const rows = traffic.slice(0, 220).map((c) => {
+        const pid = c.pid ? String(c.pid) : "";
+        const st = c.state ? c.state : "";
+        const pname = c.process_name ? escapeText(c.process_name) : "";
+        const rip = c.remote_ip ? escapeText(c.remote_ip) : "";
+        const rdns = c.remote_rdns ? escapeText(c.remote_rdns) : "";
+        const rclass = c.remote_class ? escapeText(c.remote_class) : "";
+        const rlabel = rdns || rip || escapeText(c.remote);
+        return `<tr><td>${escapeText(c.proto)}</td><td class="mono">${escapeText(c.local)}</td><td>${rlabel}<div class="muted mono" style="margin-top: 2px;">${rclass}</div></td><td>${escapeText(st)}</td><td class="mono">${pid}</td><td>${pname}</td></tr>`;
+      });
+      tbody.innerHTML = rows.join("");
+    }
+  }
+}
+
 async function poll(): Promise<HealthState> {
   const state: HealthState = {
     pythonOk: false,
@@ -1947,7 +2017,7 @@ window.addEventListener("DOMContentLoaded", async () => {
   render(lastState);
   setInterval(async () => {
     lastState = await poll();
-    render(lastState);
+    patch(lastState);
   }, 1500);
 });
 
