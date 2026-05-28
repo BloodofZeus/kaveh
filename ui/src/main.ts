@@ -90,6 +90,28 @@ async function apiJson<T>(path: string, init: RequestInit): Promise<{ ok: boolea
   }
 }
 
+async function apiPost(path: string, body?: unknown): Promise<{ ok: boolean; status: number; error: string }> {
+  const init: RequestInit = { method: "POST" };
+  if (body !== undefined) {
+    init.headers = { "Content-Type": "application/json" };
+    init.body = JSON.stringify(body);
+  }
+  const r = await apiJson<Record<string, unknown>>(path, init);
+  return { ok: r.ok, status: r.status, error: r.error };
+}
+
+function bootDiagnostics() {
+  window.addEventListener("error", (e) => {
+    const msg = (e.error instanceof Error ? e.error.message : e.message) || "Unknown error";
+    setAction(`UI error: ${msg}`, true);
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const reason = (e as PromiseRejectionEvent).reason;
+    const msg = reason instanceof Error ? reason.message : String(reason);
+    setAction(`Unhandled rejection: ${msg}`, true);
+  });
+}
+
 async function refreshNow(full: boolean) {
   try {
     lastState = await poll();
@@ -1134,6 +1156,7 @@ function render(state: HealthState) {
       const next = btn.getAttribute("data-nav") as ViewKey | null;
       if (!next) return;
       activeView = next;
+      setAction(`View: ${next.toUpperCase()}`, false);
       render(state);
     });
   });
@@ -1192,7 +1215,11 @@ function render(state: HealthState) {
 
     const flushBtn = document.getElementById("dns-flush");
     flushBtn?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/engine/dns/flush`, { method: "POST" }).catch(() => {});
+      setAction("Flushing DNS cache...", false);
+      const r = await apiPost("/engine/dns/flush");
+      if (!r.ok) setAction(`DNS flush failed: ${r.error}`, true);
+      else setAction("DNS flush requested.", false);
+      await refreshNow(false);
     });
 
     const applyBtn = document.getElementById("dns-apply");
@@ -1206,11 +1233,11 @@ function render(state: HealthState) {
       }
       dnsApplyArmed = false;
       const cfg = normalizeConfig(configDraft ?? state.config ?? defaultConfig());
-      await fetch(`${PYTHON_BASE_URL}/engine/dns/set`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ interface_name: cfg.dns_interface_name, servers: cfg.dns_servers }),
-      }).catch(() => {});
+      setAction("Applying DNS servers...", false);
+      const r = await apiPost("/engine/dns/set", { interface_name: cfg.dns_interface_name, servers: cfg.dns_servers });
+      if (!r.ok) setAction(`DNS apply failed: ${r.error}`, true);
+      else setAction("DNS apply requested.", false);
+      await refreshNow(false);
     });
 
     const enforceBtn = document.getElementById("dns-enforce");
@@ -1224,11 +1251,11 @@ function render(state: HealthState) {
       }
       dnsEnforceArmed = false;
       const cfg = normalizeConfig(configDraft ?? state.config ?? defaultConfig());
-      await fetch(`${PYTHON_BASE_URL}/engine/dns/enforce`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ servers: cfg.dns_servers }),
-      }).catch(() => {});
+      setAction("Enforcing DNS...", false);
+      const r = await apiPost("/engine/dns/enforce", { servers: cfg.dns_servers });
+      if (!r.ok) setAction(`DNS enforce failed: ${r.error}`, true);
+      else setAction("DNS enforce requested.", false);
+      await refreshNow(false);
     });
 
     const unenforceBtn = document.getElementById("dns-unenforce");
@@ -1241,7 +1268,11 @@ function render(state: HealthState) {
         return;
       }
       dnsUnenforceArmed = false;
-      await fetch(`${PYTHON_BASE_URL}/engine/dns/unenforce`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => {});
+      setAction("Disabling DNS enforcement...", false);
+      const r = await apiPost("/engine/dns/unenforce", {});
+      if (!r.ok) setAction(`DNS unenforce failed: ${r.error}`, true);
+      else setAction("DNS unenforce requested.", false);
+      await refreshNow(false);
     });
   }
 
@@ -1310,12 +1341,11 @@ function render(state: HealthState) {
         }
         trackerArmedIp = "";
         trackerArmedAction = "";
-        const url = act === "block" ? `${PYTHON_BASE_URL}/engine/monitor/block` : `${PYTHON_BASE_URL}/engine/monitor/unblock`;
-        await fetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ remote_ip: ip }),
-        }).catch(() => {});
+        setAction(act === "block" ? `Blocking ${ip}...` : `Unblocking ${ip}...`, false);
+        const r = await apiPost(act === "block" ? "/engine/monitor/block" : "/engine/monitor/unblock", { remote_ip: ip });
+        if (!r.ok) setAction(`Tracker ${act} failed: ${r.error}`, true);
+        else setAction(`Tracker ${act} requested for ${ip}.`, false);
+        await refreshNow(false);
       });
     });
 
@@ -1329,7 +1359,11 @@ function render(state: HealthState) {
         return;
       }
       trackerClearArmed = false;
-      await fetch(`${PYTHON_BASE_URL}/engine/monitor/clear_blocks`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }).catch(() => {});
+      setAction("Clearing tracker blocks...", false);
+      const r = await apiPost("/engine/monitor/clear_blocks", {});
+      if (!r.ok) setAction(`Clear blocks failed: ${r.error}`, true);
+      else setAction("Clear blocks requested.", false);
+      await refreshNow(false);
     });
   }
 
@@ -1341,15 +1375,16 @@ function render(state: HealthState) {
     });
     const refreshBtn = document.getElementById("log-refresh");
     refreshBtn?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/logs/tail`, { method: "GET" }).catch(() => {});
+      setAction("Refreshing logs...", false);
+      await refreshNow(false);
     });
     const clearBtn = document.getElementById("log-clear");
     clearBtn?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/logs/clear`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ confirm: true }),
-      }).catch(() => {});
+      setAction("Clearing logs...", false);
+      const r = await apiPost("/logs/clear", { confirm: true });
+      if (!r.ok) setAction(`Log clear failed: ${r.error}`, true);
+      else setAction("Log clear requested.", false);
+      await refreshNow(false);
     });
     const exportBtn = document.getElementById("log-export");
     exportBtn?.addEventListener("click", () => {
@@ -1399,7 +1434,13 @@ function render(state: HealthState) {
     const obSaveStart = document.getElementById("ob-save-start");
     obSaveStart?.addEventListener("click", async () => {
       const ok = await saveConfig(state.config);
-      if (ok) await fetch(`${PYTHON_BASE_URL}/engine/proxy/start`, { method: "POST" }).catch(() => {});
+      if (ok) {
+        setAction("Starting proxy...", false);
+        const r = await apiPost("/engine/proxy/start");
+        if (!r.ok) setAction(`Proxy start failed: ${r.error}`, true);
+        else setAction("Proxy start requested.", false);
+        await refreshNow(false);
+      }
     });
 
     document.querySelectorAll<HTMLButtonElement>("[data-ob-prof]").forEach((btn) => {
@@ -1489,7 +1530,8 @@ function render(state: HealthState) {
     reloadBtn?.addEventListener("click", async () => {
       configError = "";
       configDraft = null;
-      await fetch(`${PYTHON_BASE_URL}/config`, { method: "GET" }).catch(() => {});
+      setAction("Reloading config...", false);
+      await refreshNow(true);
     });
 
     const saveBtn = document.getElementById("cfg-save");
@@ -1501,7 +1543,11 @@ function render(state: HealthState) {
     saveStartBtn?.addEventListener("click", async () => {
       const ok = await saveConfig(state.config);
       if (ok) {
-        await fetch(`${PYTHON_BASE_URL}/engine/proxy/start`, { method: "POST" }).catch(() => {});
+        setAction("Starting proxy...", false);
+        const r = await apiPost("/engine/proxy/start");
+        if (!r.ok) setAction(`Proxy start failed: ${r.error}`, true);
+        else setAction("Proxy start requested.", false);
+        await refreshNow(false);
       }
     });
 
@@ -1529,15 +1575,27 @@ function render(state: HealthState) {
 
     const rotStart = document.getElementById("rot-start");
     rotStart?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/proxy/rotation/start`, { method: "POST" }).catch(() => {});
+      setAction("Starting rotation...", false);
+      const r = await apiPost("/proxy/rotation/start");
+      if (!r.ok) setAction(`Rotation start failed: ${r.error}`, true);
+      else setAction("Rotation start requested.", false);
+      await refreshNow(false);
     });
     const rotStop = document.getElementById("rot-stop");
     rotStop?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/proxy/rotation/stop`, { method: "POST" }).catch(() => {});
+      setAction("Stopping rotation...", false);
+      const r = await apiPost("/proxy/rotation/stop");
+      if (!r.ok) setAction(`Rotation stop failed: ${r.error}`, true);
+      else setAction("Rotation stop requested.", false);
+      await refreshNow(false);
     });
     const rotNow = document.getElementById("rot-now");
     rotNow?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/proxy/rotation/rotate`, { method: "POST" }).catch(() => {});
+      setAction("Rotating now...", false);
+      const r = await apiPost("/proxy/rotation/rotate");
+      if (!r.ok) setAction(`Rotate now failed: ${r.error}`, true);
+      else setAction("Rotate now requested.", false);
+      await refreshNow(false);
     });
 
     const foToggle = document.getElementById("fo-toggle");
@@ -1570,16 +1628,28 @@ function render(state: HealthState) {
     const foStart = document.getElementById("fo-start");
     foStart?.addEventListener("click", async () => {
       await saveConfig(state.config);
-      await fetch(`${PYTHON_BASE_URL}/proxy/failover/start`, { method: "POST" }).catch(() => {});
+      setAction("Starting failover monitor...", false);
+      const r = await apiPost("/proxy/failover/start");
+      if (!r.ok) setAction(`Failover start failed: ${r.error}`, true);
+      else setAction("Failover start requested.", false);
+      await refreshNow(false);
     });
     const foStop = document.getElementById("fo-stop");
     foStop?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/proxy/failover/stop`, { method: "POST" }).catch(() => {});
+      setAction("Stopping failover monitor...", false);
+      const r = await apiPost("/proxy/failover/stop");
+      if (!r.ok) setAction(`Failover stop failed: ${r.error}`, true);
+      else setAction("Failover stop requested.", false);
+      await refreshNow(false);
     });
     const foTrigger = document.getElementById("fo-trigger");
     foTrigger?.addEventListener("click", async () => {
       await saveConfig(state.config);
-      await fetch(`${PYTHON_BASE_URL}/proxy/failover/trigger`, { method: "POST" }).catch(() => {});
+      setAction("Triggering failover...", false);
+      const r = await apiPost("/proxy/failover/trigger");
+      if (!r.ok) setAction(`Failover trigger failed: ${r.error}`, true);
+      else setAction("Failover trigger requested.", false);
+      await refreshNow(false);
     });
 
     const fpUa = document.getElementById("fp-ua") as HTMLInputElement | null;
@@ -1627,17 +1697,25 @@ function render(state: HealthState) {
         { pid, circuit_id: circuitId, proxy_addr: proxyAddr },
       ];
 
-      await fetch(`${PYTHON_BASE_URL}/engine/isolation/rules`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rules: next }),
-      }).catch(() => {});
+      setAction("Updating isolation rules...", false);
+      const r = await apiPost("/engine/isolation/rules", { rules: next });
+      if (!r.ok) setAction(`Isolation rules failed: ${r.error}`, true);
+      else setAction("Isolation rules updated.", false);
+      await refreshNow(false);
     });
     isoEnable?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/engine/isolation/enable`, { method: "POST" }).catch(() => {});
+      setAction("Enabling isolation...", false);
+      const r = await apiPost("/engine/isolation/enable");
+      if (!r.ok) setAction(`Isolation enable failed: ${r.error}`, true);
+      else setAction("Isolation enable requested.", false);
+      await refreshNow(false);
     });
     isoDisable?.addEventListener("click", async () => {
-      await fetch(`${PYTHON_BASE_URL}/engine/isolation/disable`, { method: "POST" }).catch(() => {});
+      setAction("Disabling isolation...", false);
+      const r = await apiPost("/engine/isolation/disable");
+      if (!r.ok) setAction(`Isolation disable failed: ${r.error}`, true);
+      else setAction("Isolation disable requested.", false);
+      await refreshNow(false);
     });
   }
 
@@ -1663,11 +1741,11 @@ function render(state: HealthState) {
         return;
       }
       macSpoofArmed = false;
-      await fetch(`${PYTHON_BASE_URL}/engine/fingerprint/mac/spoof`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adapter_name: macSelectedAdapter, mode: "random" }),
-      }).catch(() => {});
+      setAction("Spoofing MAC (random)...", false);
+      const r = await apiPost("/engine/fingerprint/mac/spoof", { adapter_name: macSelectedAdapter, mode: "random" });
+      if (!r.ok) setAction(`MAC spoof failed: ${r.error}`, true);
+      else setAction("MAC spoof requested.", false);
+      await refreshNow(false);
     });
 
     const spoofCustom = document.getElementById("mac-custom-btn");
@@ -1678,11 +1756,11 @@ function render(state: HealthState) {
         return;
       }
       macSpoofArmed = false;
-      await fetch(`${PYTHON_BASE_URL}/engine/fingerprint/mac/spoof`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adapter_name: macSelectedAdapter, mode: "custom", mac: macCustom }),
-      }).catch(() => {});
+      setAction("Spoofing MAC (custom)...", false);
+      const r = await apiPost("/engine/fingerprint/mac/spoof", { adapter_name: macSelectedAdapter, mode: "custom", mac: macCustom });
+      if (!r.ok) setAction(`MAC spoof failed: ${r.error}`, true);
+      else setAction("MAC spoof requested.", false);
+      await refreshNow(false);
     });
 
     const resetBtn = document.getElementById("mac-reset");
@@ -1695,11 +1773,11 @@ function render(state: HealthState) {
         return;
       }
       macResetArmed = false;
-      await fetch(`${PYTHON_BASE_URL}/engine/fingerprint/mac/reset`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adapter_name: macSelectedAdapter }),
-      }).catch(() => {});
+      setAction("Resetting MAC...", false);
+      const r = await apiPost("/engine/fingerprint/mac/reset", { adapter_name: macSelectedAdapter });
+      if (!r.ok) setAction(`MAC reset failed: ${r.error}`, true);
+      else setAction("MAC reset requested.", false);
+      await refreshNow(false);
     });
 
     const jslWebrtc = document.getElementById("jsl-webrtc");
@@ -1729,7 +1807,11 @@ function render(state: HealthState) {
       }
       jsLeakEnableArmed = false;
       await saveConfig(state.config);
-      await fetch(`${PYTHON_BASE_URL}/engine/fingerprint/jsleak/enable`, { method: "POST" }).catch(() => {});
+      setAction("Enabling JS leak protection...", false);
+      const r = await apiPost("/engine/fingerprint/jsleak/enable");
+      if (!r.ok) setAction(`JS leak enable failed: ${r.error}`, true);
+      else setAction("JS leak protection enable requested.", false);
+      await refreshNow(false);
     });
 
     const jslDisable = document.getElementById("jsl-disable");
@@ -1742,7 +1824,11 @@ function render(state: HealthState) {
         return;
       }
       jsLeakDisableArmed = false;
-      await fetch(`${PYTHON_BASE_URL}/engine/fingerprint/jsleak/disable`, { method: "POST" }).catch(() => {});
+      setAction("Disabling JS leak protection...", false);
+      const r = await apiPost("/engine/fingerprint/jsleak/disable");
+      if (!r.ok) setAction(`JS leak disable failed: ${r.error}`, true);
+      else setAction("JS leak protection disable requested.", false);
+      await refreshNow(false);
     });
   }
 }
@@ -2008,6 +2094,7 @@ async function poll(): Promise<HealthState> {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+  bootDiagnostics();
   let ksKeyArmedAt = 0;
 
   window.addEventListener("keydown", async (e) => {
@@ -2033,14 +2120,22 @@ window.addEventListener("DOMContentLoaded", async () => {
       e.preventDefault();
       if (lastState.killswitchEnabled) {
         killswitchArmed = false;
-        await fetch(`${PYTHON_BASE_URL}/engine/killswitch/disable`, { method: "POST" }).catch(() => {});
+        setAction("Disabling kill switch...", false);
+        const r = await apiPost("/engine/killswitch/disable");
+        if (!r.ok) setAction(`Kill switch disable failed: ${r.error}`, true);
+        else setAction("Kill switch disable requested.", false);
+        await refreshNow(false);
         return;
       }
       const now = Date.now();
       if (now - ksKeyArmedAt < 1500) {
         ksKeyArmedAt = 0;
         killswitchArmed = false;
-        await fetch(`${PYTHON_BASE_URL}/engine/killswitch/enable`, { method: "POST" }).catch(() => {});
+        setAction("Enabling kill switch...", false);
+        const r = await apiPost("/engine/killswitch/enable");
+        if (!r.ok) setAction(`Kill switch enable failed: ${r.error}`, true);
+        else setAction("Kill switch enable requested.", false);
+        await refreshNow(false);
         return;
       }
       ksKeyArmedAt = now;
@@ -2052,9 +2147,17 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === "p") {
       e.preventDefault();
       if (lastState.proxyRunning) {
-        await fetch(`${PYTHON_BASE_URL}/engine/proxy/stop`, { method: "POST" }).catch(() => {});
+        setAction("Stopping proxy...", false);
+        const r = await apiPost("/engine/proxy/stop");
+        if (!r.ok) setAction(`Proxy stop failed: ${r.error}`, true);
+        else setAction("Proxy stop requested.", false);
+        await refreshNow(false);
       } else {
-        await fetch(`${PYTHON_BASE_URL}/engine/proxy/start`, { method: "POST" }).catch(() => {});
+        setAction("Starting proxy...", false);
+        const r = await apiPost("/engine/proxy/start");
+        if (!r.ok) setAction(`Proxy start failed: ${r.error}`, true);
+        else setAction("Proxy start requested.", false);
+        await refreshNow(false);
       }
       return;
     }
@@ -2073,6 +2176,7 @@ window.addEventListener("DOMContentLoaded", async () => {
       if (v) {
         e.preventDefault();
         activeView = v;
+        setAction(`View: ${v.toUpperCase()}`, false);
         render(lastState);
       }
     }
@@ -2182,21 +2286,26 @@ async function saveConfig(config: AppConfig | null): Promise<boolean> {
   };
 
   try {
-    const res = await fetch(`${PYTHON_BASE_URL}/config`, {
+    setAction("Saving config...", false);
+    const r = await apiJson<Record<string, unknown>>("/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
     });
-    if (!res.ok) {
-      configError = "CONFIG SAVE FAILED";
+    if (!r.ok) {
+      configError = `CONFIG SAVE FAILED: ${r.error}`;
+      setAction(configError, true);
       configSaving = false;
       return false;
     }
     configDraft = null;
     configSaving = false;
+    setAction("Config saved.", false);
     return true;
-  } catch {
-    configError = "CONFIG SAVE FAILED";
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    configError = `CONFIG SAVE FAILED: ${msg}`;
+    setAction(configError, true);
     configSaving = false;
     return false;
   }
