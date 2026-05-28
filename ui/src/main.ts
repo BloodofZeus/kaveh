@@ -34,12 +34,15 @@ type HealthState = {
   failoverStatus: FailoverStatus | null;
 };
 
-const PYTHON_BASE_URL = "http://127.0.0.1:51338";
+const PYTHON_BASE_URL = "http://localhost:51338";
 let killswitchArmed = false;
 let activeView: ViewKey = "dashboard";
 let configDraft: AppConfig | null = null;
 let configSaving = false;
 let configError = "";
+let actionMsg = "";
+let actionError = false;
+let actionAt = 0;
 let macSpoofArmed = false;
 let macResetArmed = false;
 let macSelectedAdapter = "";
@@ -59,6 +62,46 @@ let dnsEnforceArmed = false;
 let dnsUnenforceArmed = false;
 let onboardingStep: 1 | 2 | 3 = 1;
 let lastState: HealthState | null = null;
+
+function setAction(msg: string, isError: boolean) {
+  actionMsg = msg;
+  actionError = isError;
+  actionAt = Date.now();
+  if (lastState) render(lastState);
+}
+
+async function apiJson<T>(path: string, init: RequestInit): Promise<{ ok: boolean; status: number; data: T | null; error: string }> {
+  try {
+    const res = await fetch(`${PYTHON_BASE_URL}${path}`, init);
+    const status = res.status;
+    const raw = await res.text();
+    if (!res.ok) {
+      return { ok: false, status, data: null, error: raw || `HTTP ${status}` };
+    }
+    if (!raw.trim()) return { ok: true, status, data: null, error: "" };
+    try {
+      return { ok: true, status, data: JSON.parse(raw) as T, error: "" };
+    } catch {
+      return { ok: true, status, data: null, error: "" };
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, status: 0, data: null, error: msg };
+  }
+}
+
+async function refreshNow(full: boolean) {
+  try {
+    lastState = await poll();
+    if (lastState) {
+      if (full) render(lastState);
+      else patch(lastState);
+    }
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    setAction(`Refresh failed: ${msg}`, true);
+  }
+}
 
 type LogEntry = {
   ts: string;
@@ -990,6 +1033,11 @@ function render(state: HealthState) {
       `
       : "";
 
+  const actionBanner =
+    actionMsg && Date.now() - actionAt < 15000
+      ? `<div class="${actionError ? "error" : "hint"}">${escapeText(actionMsg)}</div>`
+      : "";
+
   app.innerHTML = `
     <div class="kaveh-shell">
       <header class="topbar">
@@ -1043,6 +1091,7 @@ function render(state: HealthState) {
       </header>
 
       <main class="workspace">
+        ${actionBanner}
         <section class="panel ${view !== "dashboard" ? "is-hidden" : ""}">
           <div class="panel__title">SYSTEM STATUS</div>
           <div class="panel__body">
@@ -1099,10 +1148,18 @@ function render(state: HealthState) {
   const startBtn = document.getElementById("proxy-start");
   const stopBtn = document.getElementById("proxy-stop");
   startBtn?.addEventListener("click", async () => {
-    await fetch(`${PYTHON_BASE_URL}/engine/proxy/start`, { method: "POST" }).catch(() => {});
+    setAction("Starting proxy...", false);
+    const r = await apiJson<Record<string, unknown>>("/engine/proxy/start", { method: "POST" });
+    if (!r.ok) setAction(`Proxy start failed: ${r.error}`, true);
+    else setAction("Proxy start requested.", false);
+    await refreshNow(false);
   });
   stopBtn?.addEventListener("click", async () => {
-    await fetch(`${PYTHON_BASE_URL}/engine/proxy/stop`, { method: "POST" }).catch(() => {});
+    setAction("Stopping proxy...", false);
+    const r = await apiJson<Record<string, unknown>>("/engine/proxy/stop", { method: "POST" });
+    if (!r.ok) setAction(`Proxy stop failed: ${r.error}`, true);
+    else setAction("Proxy stop requested.", false);
+    await refreshNow(false);
   });
 
   if (view === "dns") {
@@ -1192,7 +1249,11 @@ function render(state: HealthState) {
   ksBtn?.addEventListener("click", async () => {
     if (state.killswitchEnabled) {
       killswitchArmed = false;
-      await fetch(`${PYTHON_BASE_URL}/engine/killswitch/disable`, { method: "POST" }).catch(() => {});
+      setAction("Disabling kill switch...", false);
+      const r = await apiJson<Record<string, unknown>>("/engine/killswitch/disable", { method: "POST" });
+      if (!r.ok) setAction(`Kill switch disable failed: ${r.error}`, true);
+      else setAction("Kill switch disable requested.", false);
+      await refreshNow(false);
       return;
     }
 
@@ -1203,7 +1264,11 @@ function render(state: HealthState) {
     }
 
     killswitchArmed = false;
-    await fetch(`${PYTHON_BASE_URL}/engine/killswitch/enable`, { method: "POST" }).catch(() => {});
+    setAction("Enabling kill switch...", false);
+    const r = await apiJson<Record<string, unknown>>("/engine/killswitch/enable", { method: "POST" });
+    if (!r.ok) setAction(`Kill switch enable failed: ${r.error}`, true);
+    else setAction("Kill switch enable requested.", false);
+    await refreshNow(false);
   });
 
   if (view === "dashboard") {
