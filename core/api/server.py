@@ -22,7 +22,13 @@ def _write_json(handler: BaseHTTPRequestHandler, status: int, payload: dict[str,
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(raw)))
     origin = handler.headers.get("Origin", "")
-    if origin.startswith("http://localhost:") or origin.startswith("http://127.0.0.1:"):
+    if (
+        origin.startswith("http://localhost:")
+        or origin.startswith("http://127.0.0.1:")
+        or origin.startswith("http://tauri.localhost")
+        or origin.startswith("https://tauri.localhost")
+        or origin.startswith("tauri://")
+    ):
         handler.send_header("Access-Control-Allow-Origin", origin)
         handler.send_header("Vary", "Origin")
         handler.send_header("Access-Control-Allow-Headers", "Content-Type")
