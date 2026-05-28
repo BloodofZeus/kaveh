@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -69,6 +70,9 @@ func (m *Manager) Disable(ctx context.Context) error {
 }
 
 func runNetsh(ctx context.Context, args []string) error {
+	if os.Getenv("KAVEH_TEST_MODE") == "1" {
+		return nil
+	}
 	cmd := exec.CommandContext(ctx, "netsh", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

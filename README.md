@@ -78,6 +78,67 @@ npm.cmd run tauri -- dev
 
 ---
 
+## Production Release (Windows)
+
+Kaveh’s production Windows build is shipped as a Tauri installer with:
+
+- A signed installer (optional but recommended).
+- A signed auto-updater feed.
+- Bundled backend sidecars (`kaveh-engine` and `kaveh-core`) started automatically by the desktop app.
+
+### One-time setup
+
+1) **Generate updater signing keys** (keep the private key secret; the public key is embedded in the app). Tauri updater requires signed updates. See: https://tauri.app/plugin/updater/
+
+```powershell
+cd C:\Users\c4\Documents\Project\kaveh\ui
+npm.cmd run tauri -- signer generate -- -w $HOME\.tauri\kaveh-updater.key
+```
+
+2) **Configure GitHub Actions secrets** (repo settings → Actions secrets):
+
+- `TAURI_SIGNING_PRIVATE_KEY` (contents of your updater private key file)
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (if you set one)
+- `KAVEH_UPDATER_PUBKEY` (the public key text)
+
+Optional Windows code signing (choose one approach):
+
+- Thumbprint signing:
+  - `KAVEH_WINDOWS_CERT_THUMBPRINT`
+  - `KAVEH_WINDOWS_TIMESTAMP_URL` (optional)
+- PFX signing:
+  - `KAVEH_WINDOWS_PFX_BASE64` (base64-encoded `.pfx`)
+  - `KAVEH_WINDOWS_PFX_PASSWORD`
+  - `KAVEH_WINDOWS_TIMESTAMP_URL` (optional)
+
+### Release workflow
+
+Pushing a tag `v*` triggers the release workflow which runs tests, builds sidecars, builds the Tauri installers, signs the update artifacts, generates `latest.json`, and publishes a GitHub Release.
+
+- Workflow: [.github/workflows/release.yml](file:///c:/Users/c4/Documents/Project/kaveh/.github/workflows/release.yml)
+
+### Where production data lives
+
+In production, config and logs are stored in the app data directory (the desktop app sets `KAVEH_DATA_DIR` for sidecars):
+
+- Config: `%KAVEH_DATA_DIR%\config\kaveh.json`
+- Logs: `%KAVEH_DATA_DIR%\logs\kaveh_audit.jsonl`
+
+### Production readiness checklist
+
+Kaveh is considered production-ready only when:
+
+- The GitHub Release workflow succeeds for a tagged version and publishes signed installers and a valid `latest.json`.
+- A clean Windows VM validation passes:
+  - install/uninstall works
+  - app starts backend sidecars correctly
+  - killswitch enable/disable works with real firewall rules (admin)
+  - “proxy drop” scenario triggers kill switch and does not leak traffic
+  - reboot with killswitch previously enabled leaves system in a safe/expected state
+  - failover trigger works and switches upstream without leaving the proxy stopped
+
+---
+
 ## Architecture
 
 ```

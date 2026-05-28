@@ -1,2 +1,4 @@
 logs/
 .pyinstaller/
+__pycache__/
+*.pyc

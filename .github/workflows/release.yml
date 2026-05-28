@@ -1,0 +1,127 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: ui/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install UI deps
+        working-directory: ui
+        run: npm ci
+
+      - name: Tests (engine)
+        working-directory: engine
+        run: go test ./...
+
+      - name: Tests (core)
+        run: python -m unittest -q
+
+      - name: Build sidecars (engine + core)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File config/build_sidecars.ps1
+
+      - name: Configure updater + signing (patch tauri.conf.json)
+        shell: powershell
+        env:
+          KAVEH_UPDATER_PUBKEY: ${{ secrets.KAVEH_UPDATER_PUBKEY }}
+        run: |
+          if (-not $env:KAVEH_UPDATER_PUBKEY) { throw "Missing secret: KAVEH_UPDATER_PUBKEY" }
+          $path = "ui/src-tauri/tauri.conf.json"
+          $cfg = Get-Content $path -Raw | ConvertFrom-Json
+          if (-not $cfg.plugins) { $cfg | Add-Member -NotePropertyName plugins -NotePropertyValue (@{}) }
+          if (-not $cfg.plugins.updater) { $cfg.plugins | Add-Member -NotePropertyName updater -NotePropertyValue (@{}) }
+          $cfg.plugins.updater.pubkey = $env:KAVEH_UPDATER_PUBKEY.Trim()
+          $cfg.plugins.updater.endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
+          $cfg.bundle.createUpdaterArtifacts = $true
+          $cfg | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $path
+
+      - name: Build Tauri bundles (signed + updater artifacts)
+        working-directory: ui
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          KAVEH_WINDOWS_CERT_THUMBPRINT: ${{ secrets.KAVEH_WINDOWS_CERT_THUMBPRINT }}
+          KAVEH_WINDOWS_PFX_BASE64: ${{ secrets.KAVEH_WINDOWS_PFX_BASE64 }}
+          KAVEH_WINDOWS_PFX_PASSWORD: ${{ secrets.KAVEH_WINDOWS_PFX_PASSWORD }}
+          KAVEH_WINDOWS_TIMESTAMP_URL: ${{ secrets.KAVEH_WINDOWS_TIMESTAMP_URL }}
+        run: npm run tauri -- build
+
+      - name: Generate updater manifest (latest.json)
+        shell: powershell
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $bundleRoot = "ui/src-tauri/target/release/bundle"
+          $nsis = Get-ChildItem -Path $bundleRoot -Recurse -Filter "*setup*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          $msi = Get-ChildItem -Path $bundleRoot -Recurse -Filter "*.msi" -ErrorAction SilentlyContinue | Select-Object -First 1
+
+          $asset = $null
+          if ($nsis) { $asset = $nsis.FullName }
+          elseif ($msi) { $asset = $msi.FullName }
+          else { throw "No installer artifact found under $bundleRoot" }
+
+          $sigPath = $asset + ".sig"
+          if (-not (Test-Path $sigPath)) { throw "Missing signature file: $sigPath" }
+
+          $sig = (Get-Content $sigPath -Raw).Trim()
+          if (-not $sig) { throw "Empty signature file: $sigPath" }
+
+          $assetName = Split-Path -Leaf $asset
+          $url = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:TAG_NAME/$assetName"
+
+          $version = $env:TAG_NAME
+          $pubDate = (Get-Date).ToUniversalTime().ToString("o")
+
+          $json = @{
+            version = $version
+            notes = ""
+            pub_date = $pubDate
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $sig
+                url = $url
+              }
+            }
+          } | ConvertTo-Json -Depth 10
+
+          $out = Join-Path $bundleRoot "latest.json"
+          $json | Set-Content -Encoding UTF8 $out
+          Write-Host "Wrote $out"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ui/src-tauri/target/release/bundle/**/latest.json
+            ui/src-tauri/target/release/bundle/**/*.msi
+            ui/src-tauri/target/release/bundle/**/*.msi.sig
+            ui/src-tauri/target/release/bundle/**/*.exe
+            ui/src-tauri/target/release/bundle/**/*.exe.sig
