@@ -50,7 +50,7 @@ jobs:
       - name: Configure updater + signing (patch tauri.conf.json)
         shell: powershell
         env:
-          KAVEH_UPDATER_PUBKEY: ${{ secrets.KAVEH_UPDATER_PUBKEY }}
+          KAVEH_UPDATER_PUBKEY: ${{ secrets.KAVEH_UPDATER_PUBKEY || secrets.Keveh || secrets.KEVEH }}
         run: |
           if (-not $env:KAVEH_UPDATER_PUBKEY) { throw "Missing secret: KAVEH_UPDATER_PUBKEY" }
           $path = "ui/src-tauri/tauri.conf.json"
@@ -65,8 +65,8 @@ jobs:
       - name: Build Tauri bundles (signed + updater artifacts)
         working-directory: ui
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY || secrets.TAURI_PRIVATE_KEY || secrets.jaria || secrets.JARIA }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || secrets.TAURI_PRIVATE_KEY_PASSWORD }}
           KAVEH_WINDOWS_CERT_THUMBPRINT: ${{ secrets.KAVEH_WINDOWS_CERT_THUMBPRINT }}
           KAVEH_WINDOWS_PFX_BASE64: ${{ secrets.KAVEH_WINDOWS_PFX_BASE64 }}
           KAVEH_WINDOWS_PFX_PASSWORD: ${{ secrets.KAVEH_WINDOWS_PFX_PASSWORD }}
