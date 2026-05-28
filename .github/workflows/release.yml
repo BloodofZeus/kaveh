@@ -72,7 +72,8 @@ jobs:
           $cfg.plugins.updater.pubkey = $env:KAVEH_UPDATER_PUBKEY.Trim()
           $cfg.plugins.updater.endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
           $cfg.bundle.createUpdaterArtifacts = $true
-          $cfg | ConvertTo-Json -Depth 20 | Set-Content -Encoding UTF8 $path
+          $json = $cfg | ConvertTo-Json -Depth 20
+          [System.IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding($false)))
 
       - name: Build Tauri bundles (signed + updater artifacts)
         working-directory: ui
