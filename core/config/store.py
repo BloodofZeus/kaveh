@@ -92,7 +92,9 @@ class AppConfig:
 class ConfigStore:
     def __init__(self, project_root: Path) -> None:
         self._project_root = project_root
-        self._path = project_root / "config" / "kaveh.json"
+        data_root_raw = os.environ.get("KAVEH_DATA_DIR", "").strip()
+        data_root = Path(data_root_raw) if data_root_raw else project_root
+        self._path = data_root / "config" / "kaveh.json"
 
     @property
     def path(self) -> Path:

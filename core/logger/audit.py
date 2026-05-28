@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections import deque
@@ -31,7 +32,9 @@ class AuditEntry:
 
 class AuditLogger:
     def __init__(self, project_root: Path) -> None:
-        self._path = project_root / "logs" / "kaveh_audit.jsonl"
+        data_root_raw = os.environ.get("KAVEH_DATA_DIR", "").strip()
+        data_root = Path(data_root_raw) if data_root_raw else project_root
+        self._path = data_root / "logs" / "kaveh_audit.jsonl"
         self._lock = threading.Lock()
 
     @property
@@ -85,4 +88,3 @@ class AuditLogger:
         with self._lock:
             if self._path.exists():
                 self._path.unlink(missing_ok=True)
-
