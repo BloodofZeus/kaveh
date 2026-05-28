@@ -40,6 +40,8 @@ Some features require Administrator privileges (Windows Firewall rule changes, D
 - Python installed (core)
 - Node.js + npm installed (ui)
 - Rust toolchain + Tauri prerequisites installed (ui)
+  - Visual Studio Build Tools (C++ workload; provides `link.exe`)
+  - Rust MSVC target (`stable-x86_64-pc-windows-msvc`)
 
 If PowerShell blocks `npm.ps1` on your machine, use `npm.cmd` (examples below).
 
@@ -74,7 +76,37 @@ npm.cmd run tauri -- dev
 - Engine health: `GET http://127.0.0.1:51337/health`
 - Core health: `GET http://127.0.0.1:51338/health`
 - Config file: `config\kaveh.json`
-- Audit log file: `logs\kaveh_audit.jsonl`
+- Audit log file (dev): `logs\kaveh_audit.jsonl` (desktop build uses `%KAVEH_DATA_DIR%\logs\kaveh_audit.jsonl`)
+
+### Build a Windows .exe/.msi locally (Desktop)
+
+This produces a real desktop installer/bundle (not a browser build).
+
+1) Ensure Rust is using the MSVC toolchain:
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+2) Build bundled backend sidecars (engine + core):
+
+```powershell
+cd C:\Users\c4\Documents\Project\kaveh
+powershell -NoProfile -ExecutionPolicy Bypass -File config\build_sidecars.ps1
+```
+
+3) Build the Tauri installer/bundle:
+
+```powershell
+cd C:\Users\c4\Documents\Project\kaveh\ui
+npm.cmd install
+npm.cmd run tauri -- build
+```
+
+Outputs:
+
+- App exe: `ui\src-tauri\target\release\ui.exe`
+- Installers + updater artifacts: `ui\src-tauri\target\release\bundle\`
 
 ---
 
