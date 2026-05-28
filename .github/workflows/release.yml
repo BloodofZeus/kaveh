@@ -63,6 +63,10 @@ jobs:
         shell: powershell
         env:
           KAVEH_UPDATER_PUBKEY: ${{ secrets.KAVEH_UPDATER_PUBKEY || secrets.Keveh || secrets.KEVEH }}
+          KAVEH_WINDOWS_CERT_THUMBPRINT: ${{ secrets.KAVEH_WINDOWS_CERT_THUMBPRINT }}
+          KAVEH_WINDOWS_PFX_BASE64: ${{ secrets.KAVEH_WINDOWS_PFX_BASE64 }}
+          KAVEH_WINDOWS_PFX_PASSWORD: ${{ secrets.KAVEH_WINDOWS_PFX_PASSWORD }}
+          KAVEH_WINDOWS_TIMESTAMP_URL: ${{ secrets.KAVEH_WINDOWS_TIMESTAMP_URL }}
         run: |
           if (-not $env:KAVEH_UPDATER_PUBKEY) { throw "Missing secret: KAVEH_UPDATER_PUBKEY" }
           $path = "ui/src-tauri/tauri.conf.json"
@@ -72,6 +76,24 @@ jobs:
           $cfg.plugins.updater.pubkey = $env:KAVEH_UPDATER_PUBKEY.Trim()
           $cfg.plugins.updater.endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
           $cfg.bundle.createUpdaterArtifacts = $true
+
+          $thumb = ($env:KAVEH_WINDOWS_CERT_THUMBPRINT ?? "").Trim()
+          $pfx = ($env:KAVEH_WINDOWS_PFX_BASE64 ?? "").Trim()
+          $needSign = (-not [string]::IsNullOrWhiteSpace($thumb) -or -not [string]::IsNullOrWhiteSpace($pfx))
+          if ($needSign) {
+            if (-not $cfg.bundle.windows) { $cfg.bundle | Add-Member -NotePropertyName windows -NotePropertyValue (@{}) }
+            $cfg.bundle.windows.signCommand = "powershell -NoProfile -ExecutionPolicy Bypass -File sign_windows.ps1 ""%1"""
+          } else {
+            if ($cfg.bundle.windows) {
+              if ($cfg.bundle.windows.PSObject.Properties.Name -contains "signCommand") {
+                $cfg.bundle.windows.PSObject.Properties.Remove("signCommand")
+              }
+              if ($cfg.bundle.windows.PSObject.Properties.Count -eq 0) {
+                $cfg.bundle.PSObject.Properties.Remove("windows")
+              }
+            }
+          }
+
           $json = $cfg | ConvertTo-Json -Depth 20
           [System.IO.File]::WriteAllText($path, $json, (New-Object System.Text.UTF8Encoding($false)))
 

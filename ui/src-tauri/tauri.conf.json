@@ -30,9 +30,6 @@
       "binaries/kaveh-engine",
       "binaries/kaveh-core"
     ],
-    "windows": {
-      "signCommand": "powershell -NoProfile -ExecutionPolicy Bypass -File sign_windows.ps1 \"%1\""
-    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
