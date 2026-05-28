@@ -21,11 +21,11 @@ function Resolve-SignTool {
   throw "signtool.exe not found"
 }
 
-$thumbprint = ($env:KAVEH_WINDOWS_CERT_THUMBPRINT ?? "").Trim()
-$pfxPath = ($env:KAVEH_WINDOWS_PFX ?? "").Trim()
-$pfxBase64 = ($env:KAVEH_WINDOWS_PFX_BASE64 ?? "").Trim()
-$pfxPassword = ($env:KAVEH_WINDOWS_PFX_PASSWORD ?? "").Trim()
-$timestampUrl = ($env:KAVEH_WINDOWS_TIMESTAMP_URL ?? "").Trim()
+$thumbprint = ([string]$env:KAVEH_WINDOWS_CERT_THUMBPRINT).Trim()
+$pfxPath = ([string]$env:KAVEH_WINDOWS_PFX).Trim()
+$pfxBase64 = ([string]$env:KAVEH_WINDOWS_PFX_BASE64).Trim()
+$pfxPassword = ([string]$env:KAVEH_WINDOWS_PFX_PASSWORD).Trim()
+$timestampUrl = ([string]$env:KAVEH_WINDOWS_TIMESTAMP_URL).Trim()
 if ([string]::IsNullOrWhiteSpace($timestampUrl)) {
   $timestampUrl = "http://timestamp.digicert.com"
 }

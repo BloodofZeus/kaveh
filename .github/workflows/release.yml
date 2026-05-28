@@ -77,8 +77,8 @@ jobs:
           $cfg.plugins.updater.endpoints = @("https://github.com/${{ github.repository }}/releases/latest/download/latest.json")
           $cfg.bundle.createUpdaterArtifacts = $true
 
-          $thumb = ($env:KAVEH_WINDOWS_CERT_THUMBPRINT ?? "").Trim()
-          $pfx = ($env:KAVEH_WINDOWS_PFX_BASE64 ?? "").Trim()
+          $thumb = ([string]$env:KAVEH_WINDOWS_CERT_THUMBPRINT).Trim()
+          $pfx = ([string]$env:KAVEH_WINDOWS_PFX_BASE64).Trim()
           $needSign = (-not [string]::IsNullOrWhiteSpace($thumb) -or -not [string]::IsNullOrWhiteSpace($pfx))
           if ($needSign) {
             if (-not $cfg.bundle.windows) { $cfg.bundle | Add-Member -NotePropertyName windows -NotePropertyValue (@{}) }

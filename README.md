@@ -4,6 +4,10 @@
 
 Kaveh is a comprehensive desktop privacy and anonymity tool for Windows, built for journalists, activists, and privacy-conscious users who need serious, granular control over their online presence. It gives you full visibility into your network traffic and the power to shape, control, and protect every aspect of your digital identity.
 
+## Status
+
+Kaveh is under active development. It is not security-audited and should be treated as experimental. If you are operating under high-risk threat models, validate behavior in a clean Windows VM before relying on it.
+
 ---
 
 ## Why Kaveh?
@@ -52,22 +56,22 @@ From the repository root:
 **Terminal 1 — Go engine**
 
 ```powershell
-cd C:\Users\c4\Documents\Project\kaveh\engine
+cd .\engine
 go run .
 ```
 
 **Terminal 2 — Python core API**
 
 ```powershell
-cd C:\Users\c4\Documents\Project\kaveh
+cd .
 python -m core.api.server
 ```
 
 **Terminal 3 — Tauri UI**
 
 ```powershell
-cd C:\Users\c4\Documents\Project\kaveh\ui
-npm.cmd install
+cd .\ui
+npm.cmd ci
 npm.cmd run tauri -- dev
 ```
 
@@ -88,18 +92,11 @@ This produces a real desktop installer/bundle (not a browser build).
 rustup default stable-x86_64-pc-windows-msvc
 ```
 
-2) Build bundled backend sidecars (engine + core):
+2) Build the Tauri installer/bundle (this also builds bundled backend sidecars automatically):
 
 ```powershell
-cd C:\Users\c4\Documents\Project\kaveh
-powershell -NoProfile -ExecutionPolicy Bypass -File config\build_sidecars.ps1
-```
-
-3) Build the Tauri installer/bundle:
-
-```powershell
-cd C:\Users\c4\Documents\Project\kaveh\ui
-npm.cmd install
+cd .\ui
+npm.cmd ci
 npm.cmd run tauri -- build
 ```
 
@@ -147,7 +144,7 @@ Optional Windows code signing (choose one approach):
 
 Pushing a tag `v*` triggers the release workflow which runs tests, builds sidecars, builds the Tauri installers, signs the update artifacts, generates `latest.json`, and publishes a GitHub Release.
 
-- Workflow: [.github/workflows/release.yml](file:///c:/Users/c4/Documents/Project/kaveh/.github/workflows/release.yml)
+- Workflow: [.github/workflows/release.yml](.github/workflows/release.yml)
 
 ### Where production data lives
 
@@ -313,6 +310,25 @@ You decide your threat model. You decide how aggressive your settings are. Kaveh
 
 - **Primary:** Windows
 - Linux and macOS support planned for future releases
+
+---
+
+## Contributing
+
+- Bug reports and feature requests: open an issue with logs and repro steps.
+- Pull requests: keep changes focused, follow the existing layer boundaries (Tauri ↔ Python ↔ Go), and include tests when changing core logic.
+- Local checks:
+  - Engine tests: `cd .\engine; go test ./...`
+  - Core tests: `python -m unittest -q`
+  - UI build: `cd .\ui; npm.cmd ci; npm.cmd run build`
+
+## Security
+
+If you believe you’ve found a security issue, please avoid filing a public issue with sensitive details. Use GitHub Security Advisories for this repository.
+
+## License
+
+This repository does not currently include a `LICENSE` file. Until a license is added, the code is source-available but not open source by OSI definition. To make it open source, add a `LICENSE` file (for example: MIT, Apache-2.0, or GPL-3.0) and ensure all dependencies and bundled artifacts are compatible.
 
 ---
 
