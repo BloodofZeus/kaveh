@@ -126,7 +126,7 @@ jobs:
           } | ConvertTo-Json -Depth 10
 
           $out = Join-Path $bundleRoot "latest.json"
-          $json | Set-Content -Encoding UTF8 $out
+          [System.IO.File]::WriteAllText($out, $json, (New-Object System.Text.UTF8Encoding($false)))
           Write-Host "Wrote $out"
 
       - name: Publish GitHub Release
