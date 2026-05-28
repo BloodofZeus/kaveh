@@ -1152,12 +1152,12 @@ function render(state: HealthState) {
   `;
 
   document.querySelectorAll<HTMLButtonElement>("[data-nav]").forEach((btn) => {
-    btn.addEventListener("click", () => {
+    btn.addEventListener("click", async () => {
       const next = btn.getAttribute("data-nav") as ViewKey | null;
       if (!next) return;
       activeView = next;
       setAction(`View: ${next.toUpperCase()}`, false);
-      render(state);
+      await refreshNow(true);
     });
   });
 
@@ -2177,7 +2177,7 @@ window.addEventListener("DOMContentLoaded", async () => {
         e.preventDefault();
         activeView = v;
         setAction(`View: ${v.toUpperCase()}`, false);
-        render(lastState);
+        await refreshNow(true);
       }
     }
   });
