@@ -21,7 +21,8 @@ class EngineClient:
 
         req = urllib.request.Request(url=url, method=method, data=data, headers=headers)
         try:
-            with urllib.request.urlopen(req, timeout=5) as resp:
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(req, timeout=5) as resp:
                 raw = resp.read().decode("utf-8")
                 return json.loads(raw) if raw.strip() else {}
         except urllib.error.HTTPError as e:

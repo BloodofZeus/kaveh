@@ -55,8 +55,14 @@ func main() {
 	}
 
 	go func() {
+		ln, err := listenTCP(apiServer.Addr)
+		if err != nil {
+			logger.Printf("api listen error: %v", err)
+			return
+		}
+
 		logger.Printf("api listening on %s", apiServer.Addr)
-		if err := apiServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := apiServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			logger.Printf("api server error: %v", err)
 		}
 	}()
