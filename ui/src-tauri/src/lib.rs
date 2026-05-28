@@ -98,7 +98,8 @@ fn start_sidecars(app: &AppHandle) {
 fn stop_sidecars(app: &AppHandle) {
     let state = app.state::<SidecarState>();
 
-    if let Some(mut child) = state.core.lock().unwrap().take() {
+    let core_child = { state.core.lock().unwrap().take() };
+    if let Some(child) = core_child {
         if let Err(e) = child.kill() {
             log_sidecar_event(app, &format!("failed to kill kaveh-core: {e:?}"));
         } else {
@@ -106,7 +107,8 @@ fn stop_sidecars(app: &AppHandle) {
         }
     }
 
-    if let Some(mut child) = state.engine.lock().unwrap().take() {
+    let engine_child = { state.engine.lock().unwrap().take() };
+    if let Some(child) = engine_child {
         if let Err(e) = child.kill() {
             log_sidecar_event(app, &format!("failed to kill kaveh-engine: {e:?}"));
         } else {
@@ -125,7 +127,7 @@ pub fn run() {
         }
     }
 
-    let mut app = tauri::Builder::default()
+    let app = tauri::Builder::default()
         .manage(SidecarState {
             engine: Mutex::new(None),
             core: Mutex::new(None),
