@@ -21,18 +21,15 @@ def _write_json(handler: BaseHTTPRequestHandler, status: int, payload: dict[str,
     handler.send_response(status)
     handler.send_header("Content-Type", "application/json")
     handler.send_header("Content-Length", str(len(raw)))
-    origin = handler.headers.get("Origin", "")
-    if (
-        origin.startswith("http://localhost:")
-        or origin.startswith("http://127.0.0.1:")
-        or origin.startswith("http://tauri.localhost")
-        or origin.startswith("https://tauri.localhost")
-        or origin.startswith("tauri://")
-    ):
-        handler.send_header("Access-Control-Allow-Origin", origin)
-        handler.send_header("Vary", "Origin")
-        handler.send_header("Access-Control-Allow-Headers", "Content-Type")
-        handler.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS")
+    origin = handler.headers.get("Origin", "") or ""
+    allow_origin = "*" if origin in ("", "null") else origin
+    handler.send_header("Access-Control-Allow-Origin", allow_origin)
+    handler.send_header("Vary", "Origin")
+    handler.send_header("Access-Control-Allow-Headers", "Content-Type")
+    handler.send_header("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS")
+    handler.send_header("Access-Control-Max-Age", "600")
+    if (handler.headers.get("Access-Control-Request-Private-Network", "") or "").lower() == "true":
+        handler.send_header("Access-Control-Allow-Private-Network", "true")
     handler.end_headers()
     handler.wfile.write(raw)
 
