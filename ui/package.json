@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:sidecars": "powershell -NoProfile -ExecutionPolicy Bypass -File ..\\\\config\\\\build_sidecars.ps1",
+    "build:tauri": "npm run build:sidecars && npm run build",
     "preview": "vite preview",
     "tauri": "node ./node_modules/@tauri-apps/cli/tauri.js"
   },
